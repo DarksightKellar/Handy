@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use log::{debug, warn};
 use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXValue, AXValueType};
-use objc2_core_foundation::{CFRange, CFRetained, CFString, CFType};
+use objc2_core_foundation::{kCFBooleanTrue, CFRange, CFRetained, CFString, CFType};
 
 use super::watch::{adjust_caret, locate_swap, utf16_range, FieldReader};
 
@@ -28,6 +28,8 @@ const ATTR_VALUE: &str = "AXValue";
 const ATTR_SELECTED_RANGE: &str = "AXSelectedTextRange";
 const ATTR_SELECTED_TEXT: &str = "AXSelectedText";
 const SECURE_ROLE: &str = "AXSecureTextField";
+const ATTR_FOCUSED_APP: &str = "AXFocusedApplication";
+const ATTR_MANUAL_ACCESSIBILITY: &str = "AXManualAccessibility";
 
 /// Whether this process may use the Accessibility API.
 pub fn is_trusted() -> bool {
@@ -98,6 +100,38 @@ fn set_string(element: &AXUIElement, name: &'static str, text: &str) -> bool {
     let value = CFString::from_str(text);
     // SAFETY: both arguments are live CF objects.
     unsafe { element.set_attribute_value(&attribute, value.as_ref()) == AXError::Success }
+}
+
+/// Asks the focused app to show its text to Accessibility clients.
+///
+/// Electron and Chromium apps (Slack, Discord, VS Code, browsers) keep their
+/// text hidden from Accessibility until a client sets `AXManualAccessibility`
+/// on the app. Without it the watch reads no text in those apps. A native app
+/// rejects the attribute, which changes nothing.
+///
+/// The app builds its text tree some time after the request, so this runs when
+/// a recording starts, well before the paste.
+pub fn expose_focused_app_text() {
+    if !is_trusted() {
+        return;
+    }
+    // SAFETY: no arguments; returns a retained system-wide element.
+    let system = unsafe { AXUIElement::new_system_wide() };
+    let Some(app) =
+        copy_attribute(&system, ATTR_FOCUSED_APP).and_then(|v| v.downcast::<AXUIElement>().ok())
+    else {
+        return;
+    };
+    // SAFETY: a plain setter on a live element.
+    unsafe { app.set_messaging_timeout(MESSAGING_TIMEOUT_SECS) };
+    // SAFETY: reads a constant that CoreFoundation defines.
+    let Some(yes) = (unsafe { kCFBooleanTrue }) else {
+        return;
+    };
+    let attribute = CFString::from_static_str(ATTR_MANUAL_ACCESSIBILITY);
+    // SAFETY: both arguments are live CF objects.
+    let error = unsafe { app.set_attribute_value(&attribute, yes.as_ref()) };
+    debug!("Asked the focused app to expose its text: {:?}", error);
 }
 
 /// The element that has keyboard focus, system wide.

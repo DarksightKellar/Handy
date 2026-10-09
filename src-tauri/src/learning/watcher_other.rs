@@ -17,3 +17,6 @@ pub fn replace_in_focused(
 ) -> Result<(), String> {
     Err("Swapping in the text box is not supported on this platform".to_string())
 }
+
+/// Asks the focused app to expose its text. Nothing to do here.
+pub fn expose_focused_app_text() {}

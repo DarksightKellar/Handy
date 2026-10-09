@@ -468,6 +468,11 @@ impl ShortcutAction for TranscribeAction {
         let plan_started = Instant::now();
         let settings = get_settings(app);
         let is_always_on = settings.always_on_microphone;
+        if settings.learning_enabled {
+            // The app that will receive the paste may need time to expose its
+            // text for the watch, so ask it now.
+            crate::learning::prepare_focused_app();
+        }
 
         let selected_model_info = app
             .state::<Arc<ModelManager>>()
