@@ -25,7 +25,7 @@ use super::notice::{LearningNotice, NoticeSink};
 use super::store::RuleStore;
 use super::watch::{spawn_watch_after, WatchHandle, WatchTiming};
 use crate::managers::history::HistoryManager;
-use crate::settings::{get_settings, AppSettings};
+use crate::settings::{get_settings, AppSettings, PasteMethod};
 
 /// Builds a decider for an API key. `None` means there is no decider.
 pub type DeciderFactory = Box<dyn Fn(&str) -> Option<SharedDecider> + Send + Sync>;
@@ -588,6 +588,12 @@ impl LearningService {
     /// Call right after a successful paste. It returns at once: the caller is
     /// the main thread, and everything slow runs on worker threads.
     pub fn after_paste(self: &Arc<Self>, app: &AppHandle, session: PasteSession) {
+        // `utils::paste` succeeds without pasting when the method is `None`.
+        // There is no text in any box to watch, swap or learn from.
+        if !paste_leaves_text(get_settings(app).paste_method) {
+            debug!("Paste method is None: no learning session for this paste");
+            return;
+        }
         let pasted = session.pasted.clone();
         let handle = self.begin_session(session);
         let snapshot = lock(&handle).clone();
@@ -711,6 +717,11 @@ impl LearningService {
             }
         });
     }
+}
+
+/// Whether a paste with this method puts text in the focused box.
+fn paste_leaves_text(method: PasteMethod) -> bool {
+    !matches!(method, PasteMethod::None)
 }
 
 /// Whether `edited` replaces at least one word of `pasted`. Words only added
@@ -1320,6 +1331,13 @@ mod tests {
             "send it to Calvin",
             "send it to Calvin."
         ));
+    }
+
+    #[test]
+    fn a_paste_with_method_none_leaves_no_text_to_learn_from() {
+        assert!(!paste_leaves_text(PasteMethod::None));
+        assert!(paste_leaves_text(PasteMethod::Direct));
+        assert!(paste_leaves_text(PasteMethod::CtrlV));
     }
 
     #[test]
