@@ -73,15 +73,52 @@ fn flush(
     ) {
         let (old_start, old_end) = tight(old, a[of].start, a[ol].end);
         let (new_start, new_end) = tight(new, b[nf].start, b[nl].end);
-        hunks.push(Hunk {
+        let hunk = Hunk {
             old: squash_space(&old[old_start..old_end]),
             new: squash_space(&new[new_start..new_end]),
             old_start,
             old_end,
-        });
+        };
+        let same_words = old_run.len() == new_run.len()
+            && old_run
+                .iter()
+                .zip(new_run.iter())
+                .all(|(&i, &j)| a[i].norm == b[j].norm);
+        let at_sentence_start = starts_sentence(old, a, of) || starts_sentence(new, b, nf);
+        // A capital that only marks the start of a sentence ("so" and "So")
+        // is grammar. It says nothing about how the word is spelt.
+        if !(same_words && at_sentence_start && is_sentence_case_pair(&hunk.old, &hunk.new)) {
+            hunks.push(hunk);
+        }
     }
     old_run.clear();
     new_run.clear();
+}
+
+/// True when token `idx` of `text` is the first word of a sentence: the first
+/// word, one after a word that ends in `.`, `!` or `?` (closing quotes and
+/// brackets allowed), or one after a line break.
+fn starts_sentence(text: &str, tokens: &[Token], idx: usize) -> bool {
+    let Some(previous) = idx.checked_sub(1).map(|p| &tokens[p]) else {
+        return true;
+    };
+    let ends_sentence = previous
+        .raw
+        .trim_end_matches(['"', '\'', ')', ']', '\u{201d}', '\u{2019}'])
+        .ends_with(['.', '!', '?']);
+    ends_sentence || text[previous.end..tokens[idx].start].contains('\n')
+}
+
+/// True when the two texts differ only in the case of the first letter.
+fn is_sentence_case_pair(a: &str, b: &str) -> bool {
+    fn upper_first(s: &str) -> String {
+        let mut chars = s.chars();
+        chars
+            .next()
+            .map(|c| c.to_uppercase().chain(chars).collect())
+            .unwrap_or_default()
+    }
+    a != b && (upper_first(a) == b || upper_first(b) == a)
 }
 
 /// Shrinks `start..end` so it begins and ends on a letter or digit.
@@ -201,5 +238,27 @@ mod tests {
         let h = word_hunks(old, "café, Kelvin! ok");
         assert_eq!(h.len(), 1);
         assert_eq!(&old[h[0].old_start..h[0].old_end], "Calvin");
+    }
+
+    #[test]
+    fn a_capital_that_starts_a_sentence_is_not_a_change() {
+        // The new text only added a full stop, so "So" is grammar, not a rule.
+        assert!(word_hunks("we left so it rained", "we left. So it rained").is_empty());
+        // The same in the other direction, and after "?" and "!" and a newline.
+        assert!(word_hunks("we left. So it rained", "we left so it rained").is_empty());
+        assert!(word_hunks("did you go? yes we did", "did you go? Yes we did").is_empty());
+        assert!(word_hunks("we won! then we left", "we won! Then we left").is_empty());
+        assert!(word_hunks("first line\nsecond line", "first line\nSecond line").is_empty());
+        // The first word of the text starts a sentence too.
+        assert!(word_hunks("so it rained", "So it rained").is_empty());
+    }
+
+    #[test]
+    fn a_mid_sentence_case_change_is_still_a_hunk() {
+        let h = word_hunks("we asked eres to help", "we asked Eres to help");
+        assert_eq!(h.len(), 1);
+        // A capital at a sentence start that is not plain sentence case is a spelling.
+        let h = word_hunks("it works. iphone is new", "it works. iPhone is new");
+        assert_eq!((h[0].old.as_str(), h[0].new.as_str()), ("iphone", "iPhone"));
     }
 }

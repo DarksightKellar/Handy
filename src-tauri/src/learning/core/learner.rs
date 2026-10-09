@@ -516,4 +516,37 @@ mod tests {
             (RuleKind::Phrase, "get hub", "GitHub")
         );
     }
+
+    #[test]
+    fn edits_that_change_the_meaning_are_not_learned() {
+        for (pasted, edited) in [
+            ("meet on Tuesday", "meet on Thursday"),
+            ("it can work", "it can't work"),
+            ("see you Monday", "see you Sunday"),
+            ("me to", "me too"),
+            ("sit in the car", "sit on the car"),
+            ("the dog", "they dog"),
+            ("in March", "in May"),
+            ("take 15 of them", "take 50 of them"),
+            ("it has colour", "it has no colour"),
+        ] {
+            assert!(
+                observe(pasted, edited, &[], &[]).is_empty(),
+                "{pasted:?} -> {edited:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_capital_after_a_full_stop_is_not_learned() {
+        // The fix was a full stop. "so" must not become "So" everywhere.
+        assert!(observe("we left so it rained", "we left. So it rained", &[], &[]).is_empty());
+        assert!(observe(
+            "it rained then we left",
+            "it rained. Then we left",
+            &[],
+            &[]
+        )
+        .is_empty());
+    }
 }

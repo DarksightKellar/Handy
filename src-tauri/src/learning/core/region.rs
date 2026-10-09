@@ -1,6 +1,10 @@
 //! The watch state machine: find the pasted region inside a text-box value that
 //! keeps changing, and report the last good reading of it.
 
+use std::collections::HashMap;
+
+use super::text::tokenize;
+
 /// Characters of context kept on each side of the pasted region.
 const ANCHOR_CHARS: usize = 24;
 /// An anchor may shrink toward the region (so an edit next to the region does
@@ -103,7 +107,33 @@ impl Watch {
                 .find_map(|from| self.find_end(reading, from).map(|r| (from, r)))
                 .map(|(from, end)| &reading[from..from + end.len()])
         }?;
-        (!region.trim().is_empty()).then_some(region)
+        (!region.trim().is_empty() && self.resembles_paste(region)).then_some(region)
+    }
+
+    /// Whether `region` can be the pasted text, edited. With no text before and
+    /// after the paste the anchors match anything, so a message typed after
+    /// the box was cleared would pass as the region. A region that keeps fewer
+    /// than half of the pasted words is not the paste. A one- or two-word paste
+    /// has too few words to count; its edit may replace most of them, so it may
+    /// grow by one word at most.
+    fn resembles_paste(&self, region: &str) -> bool {
+        let pasted = tokenize(&self.pasted);
+        let mut available: HashMap<String, usize> = HashMap::new();
+        for token in tokenize(region) {
+            *available.entry(token.norm).or_default() += 1;
+        }
+        let region_words: usize = available.values().sum();
+        let shared = pasted
+            .iter()
+            .filter(|t| match available.get_mut(&t.norm) {
+                Some(n) if *n > 0 => {
+                    *n -= 1;
+                    true
+                }
+                _ => false,
+            })
+            .count();
+        shared * 2 >= pasted.len() || (pasted.len() <= 2 && region_words <= pasted.len() + 1)
     }
 
     /// The part of `reading[from..]` that ends at the after-anchor (or at the
@@ -233,5 +263,45 @@ mod tests {
         let mut w = Watch::start("hello Calvin | tail end", "hello Calvin").unwrap();
         w.feed(Some("hello Kelvin | tail end"));
         assert_eq!(w.finish().as_deref(), Some("hello Kelvin"));
+    }
+
+    #[test]
+    fn a_message_typed_after_sending_is_not_the_pasted_region() {
+        // Empty box before the paste: both anchors are empty.
+        let mut w = Watch::start(
+            "send the report to Kelvin today",
+            "send the report to Kelvin today",
+        )
+        .unwrap();
+        assert_eq!(w.feed(Some("")), WatchStep::Continue);
+        assert_eq!(
+            w.feed(Some("thanks, see you at the meeting tomorrow morning")),
+            WatchStep::Finish(None)
+        );
+    }
+
+    #[test]
+    fn unrelated_text_does_not_replace_the_last_good_region() {
+        let mut w = Watch::start(
+            "send the report to Calvin today",
+            "send the report to Calvin today",
+        )
+        .unwrap();
+        w.feed(Some("send the report to Kelvin today"));
+        assert_eq!(
+            w.feed(Some("a brand new message about lunch plans")),
+            WatchStep::Continue
+        );
+        assert_eq!(
+            w.feed(Some("another new message about dinner")),
+            WatchStep::Finish(Some("send the report to Kelvin today".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_short_paste_can_still_be_edited() {
+        let mut w = Watch::start("Calvin", "Calvin").unwrap();
+        assert_eq!(w.feed(Some("Kelvin")), WatchStep::Continue);
+        assert_eq!(w.finish().as_deref(), Some("Kelvin"));
     }
 }
