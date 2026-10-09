@@ -714,6 +714,18 @@
     "processing": "Processing...",
     "loadingModel": "Loading model..."
   },
+  "notice": {
+    "learned": "Learned: {{from}} → {{to}}",
+    "undo": "Undo",
+    "undone": "Undone",
+    "undoFailed": "Could not undo.",
+    "pasted": "Pasted “{{chosen}}”.",
+    "swapTo": "Swap to “{{alternative}}”",
+    "swapHint": "or press {{shortcut}}",
+    "swapped": "Swapped",
+    "swapUnavailable": "Could not swap.",
+    "swapFailed": "Could not swap. “{{alternative}}” is on the clipboard."
+  },
   "secureInput": {
     "blockedWithCulprit_one": "{{name}} may be blocking 1 shortcut",
     "blockedWithCulprit_other": "{{name}} may be blocking {{count}} shortcuts",

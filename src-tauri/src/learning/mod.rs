@@ -5,6 +5,7 @@ pub mod commands;
 pub mod core;
 pub mod jev;
 pub mod notice;
+pub mod notice_window;
 #[cfg(target_os = "macos")]
 #[path = "watcher_macos.rs"]
 mod platform;

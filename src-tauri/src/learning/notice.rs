@@ -1,6 +1,7 @@
 //! Events the learning layer sends to the notice panel (Task 8).
 //!
-//! The panel only shows them; every decision is made in Rust.
+//! The panel only shows them; every decision is made in Rust. The window that
+//! hosts the panel is in `notice_window.rs`.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -36,11 +37,9 @@ pub trait NoticeSink {
 }
 
 impl NoticeSink for tauri::AppHandle {
+    /// Sends the notice to the windows and shows the notice panel.
     fn notice(&self, notice: LearningNotice) {
-        use tauri_specta::Event;
-        if let Err(e) = notice.emit(self) {
-            log::warn!("Failed to emit learning notice: {e}");
-        }
+        super::notice_window::dispatch(self, notice);
     }
 }
 
