@@ -29,7 +29,7 @@
 ## Review Focus
 
 1. Kelvin sends the Slack message (the box clears) before the watch ends → the last good reading must still be learned from.
-2. Kelvin edits text *before* the pasted region in the same box → the pasted region must still be found, or the reading ignored; never learn from text Handy did not paste.
+2. Kelvin edits text _before_ the pasted region in the same box → the pasted region must still be found, or the reading ignored; never learn from text Handy did not paste.
 3. A rule's `to` is a proper noun and the match is at sentence start, or `to` is lower-case at sentence start → casing stays right ("Eres is…", "okay, so…").
 4. Two pastes in quick succession → the first watch finishes (learns) before the second starts; never mixes texts.
 5. Accessibility not granted, or Secure Input on → no watch, no crash, no notice; paste unchanged.
@@ -41,10 +41,12 @@ Each line has a test in the owning task (marked **RF1**–**RF5**).
 ### Task 1: Core text, sound-alike check and word diff
 
 **Files:**
+
 - Create: `src-tauri/src/learning/mod.rs`, `src-tauri/src/learning/core/mod.rs`, `core/text.rs`, `core/sound.rs`, `core/diff.rs`
 - Modify: `src-tauri/src/lib.rs` (add `mod learning;`)
 
 **Interfaces — Produces:**
+
 ```rust
 // core/text.rs
 pub struct Token { pub raw: String, pub norm: String, pub start: usize, pub end: usize } // byte offsets into the source
@@ -60,7 +62,8 @@ pub fn word_hunks(old: &str, new: &str) -> Vec<Hunk>; // replacement hunks only;
 ```
 
 `classify` rules:
-- `Spelling` when `letters_only(old) == letters_only(new)` and the raw text differs (case, spaces, hyphens), or when the normalized Levenshtein similarity of `letters_only` ≥ 0.75 *and* both are a single token ("ok" → "okay" is caught by sound instead; that is fine).
+
+- `Spelling` when `letters_only(old) == letters_only(new)` and the raw text differs (case, spaces, hyphens), or when the normalized Levenshtein similarity of `letters_only` ≥ 0.75 _and_ both are a single token ("ok" → "okay" is caught by sound instead; that is fine).
 - `SoundAlike` when the phonetic keys are close: key = per-word consonant skeleton (implement a small metaphone-style key: lowercase; map `ph→f, ck→k, c→k, q→k, x→ks, v→f, z→s, j→g`… drop vowels except a leading vowel which becomes `a`; drop `h` after a consonant and leading `h`; collapse repeats; concatenate words without spaces). Similar when `strsim::normalized_levenshtein(key_old, key_new) >= 0.6` or `strsim::normalized_levenshtein(letters_only(old), letters_only(new)) >= 0.6`.
 - Else `ChangeOfMind`.
 - Either side longer than 4 words → `ChangeOfMind`.
@@ -116,6 +119,7 @@ pub fn word_hunks(old: &str, new: &str) -> Vec<Hunk>; // replacement hunks only;
 **Files:** Create `core/rules.rs`, `core/learner.rs`.
 
 **Interfaces — Consumes:** Task 1. **Produces:**
+
 ```rust
 // rules.rs
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, specta::Type)] pub enum RuleKind { Word, Phrase, Spelling }
@@ -140,6 +144,7 @@ pub fn observe(pasted: &str, edited: &str, applications: &[Application], rules: 
 `apply`: match rules (not paused) on token-norm sequences, longest `from` first, left to right, no overlaps, whole tokens only. Keep the first token's leading punctuation and the last token's trailing punctuation. Casing: if `to` has any upper-case letter, use `to` verbatim; else if the match is at sentence start (first token of text, or previous token ends with `.`, `!`, `?`), capitalise its first letter; else use `to`. Verdict `Apply` → replace. `Keep` → leave. `Ambiguous` → if a decider is given, call it with the sentence (the text with the match replaced by `___`) and options `[to, original]`; if `probs[i] >= jev_threshold` take option i with `alternative: None`; otherwise (or no decider / decider returns None) take the higher-p option (`to` when `p_to >= 0.5`) with `alternative: Some(other)`.
 
 `observe`: for each `word_hunks(pasted, edited)` hunk:
+
 - If the hunk overlaps an application's range and `hunk.new` normalises to that application's `original` → `Miss(rule_id)`.
 - Else if it overlaps an application and `hunk.new` normalises to that application's `chosen` → ignore.
 - Else if an existing rule has the same normalised `from` and `to` → `Hit(rule_id)`.
@@ -202,6 +207,7 @@ impl Decider for Fixed { fn choose(&self, _: &str, _: &[String]) -> Option<Vec<f
 **Files:** Create `core/region.rs`.
 
 **Produces:**
+
 ```rust
 pub struct Watch { /* baseline, pasted_start, pasted_end, last_region: Option<String>, misses_in_row: u32 */ }
 pub enum WatchStep { Continue, Finish(Option<String>) } // Finish(Some(edited_region)) or Finish(None) = nothing to learn
@@ -213,9 +219,11 @@ impl Watch {
     pub fn finish(self) -> Option<String>; // timeout
 }
 ```
+
 Locate the pasted text in the baseline (last occurrence). Anchors: up to 24 chars of baseline before the region and up to 24 chars after it. A reading is "good" when the before-anchor occurs and the after-anchor occurs after it; the region is the text between them (trimmed of the anchor edges). Empty anchors match the string start/end. A good reading sets `last_region`. A reading that is not good increments `misses_in_row`; at 2 → `Finish(last_region)` (this is the send-and-clear case). `None` reading → `Finish(last_region)`. `finish()` returns `last_region`. A `last_region` equal to `pasted` returns `None` (nothing changed).
 
 - [ ] **Step 1: Failing tests:**
+
 ```rust
 #[test] fn rf1_send_clears_box_but_edit_is_kept() {
     let mut w = Watch::start("send it to Calvin", "send it to Calvin").unwrap();
@@ -241,6 +249,7 @@ Locate the pasted text in the baseline (last occurrence). Anchors: up to 24 char
     assert!(matches!(w.feed(None), WatchStep::Finish(Some(ref s)) if s == "hello Kelvin"));
 }
 ```
+
 - [ ] **Steps 2–4** as usual. **Step 5: Commit** `feat(learning): watch state machine`.
 
 ---
@@ -250,6 +259,7 @@ Locate the pasted text in the baseline (last occurrence). Anchors: up to 24 char
 **Files:** Create `src-tauri/src/learning/store.rs`.
 
 **Produces:**
+
 ```rust
 pub struct RuleStore { conn: std::sync::Mutex<rusqlite::Connection> }
 impl RuleStore {
@@ -264,6 +274,7 @@ impl RuleStore {
     pub fn delete(&self, id: i64) -> anyhow::Result<()>;
 }
 ```
+
 Schema (`rusqlite_migration`, same pattern as `managers/history.rs`):
 `CREATE TABLE rules (id INTEGER PRIMARY KEY AUTOINCREMENT, from_text TEXT NOT NULL, to_text TEXT NOT NULL, from_norm TEXT NOT NULL, to_norm TEXT NOT NULL, kind TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 1, misses INTEGER NOT NULL DEFAULT 0, applied INTEGER NOT NULL DEFAULT 0, paused BOOLEAN NOT NULL DEFAULT 0, source_sentence TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(from_norm, to_norm));`
 
@@ -274,12 +285,14 @@ Schema (`rusqlite_migration`, same pattern as `managers/history.rs`):
 ### Task 5: Service, settings, pipeline hook, history column, prompt feed
 
 **Files:**
+
 - Create: `src-tauri/src/learning/service.rs`, `src-tauri/src/learning/commands.rs`
 - Modify: `src-tauri/src/settings.rs` (fields + defaults + default-settings JSON test), `src-tauri/src/actions.rs` (`process_transcription_output`, paste path), `src-tauri/src/managers/history.rs` (migration `ALTER TABLE transcription_history ADD COLUMN pasted_text TEXT;` and `ADD COLUMN edited_text TEXT;`, fields on `HistoryEntry`, `save_entry` gets `pasted_text: Option<String>`, new `set_edited_text(id, text)`), `src-tauri/src/managers/transcription.rs` (prompt feed at the `initial_prompt` site, ~line 1317), `src-tauri/src/lib.rs` (manage the service, register commands), `src/bindings.ts` (regenerated by running the app in debug or by the specta export path the repo uses).
 
 **Settings** (all `#[serde(default = ...)]`): `learning_enabled: bool = true`, `learning_watch_seconds: u32 = 30`, `jev_api_key: String = ""`, `jev_confidence_threshold: f64 = 0.8`. Binding `learning_swap` (name "Swap learned word", default macOS `ctrl+option+s`, others `ctrl+alt+s`), registered only while a swap notice is visible — follow the `register_cancel_shortcut` / `unregister_cancel_shortcut` pattern in `shortcut/mod.rs` and add it to `ACTION_MAP` in `actions.rs`.
 
 **Service:**
+
 ```rust
 pub struct LearningService { store: RuleStore, last: Mutex<Option<PasteSession>>, decider: Option<Box<dyn Decider + Send + Sync>> }
 pub struct PasteSession { pub id: u64, pub pasted: String, pub applications: Vec<Application>, pub history_id: Option<i64> }
@@ -290,7 +303,8 @@ impl LearningService {
     pub fn prompt_words(&self, budget_words: usize) -> Vec<String>; // distinct `to` values, ordered by hits+applied desc, within budget
 }
 ```
-In `process_transcription_output`: when `settings.learning_enabled`, run `apply` on `final_text` *before* LLM post-processing; keep the `Applied` for the session. Return it in `ProcessedTranscription` (add `learning: Option<Applied>`). Save `pasted_text` = the final pasted text in history. After `utils::paste` returns `Ok`, call `after_paste`.
+
+In `process_transcription_output`: when `settings.learning_enabled`, run `apply` on `final_text` _before_ LLM post-processing; keep the `Applied` for the session. Return it in `ProcessedTranscription` (add `learning: Option<Applied>`). Save `pasted_text` = the final pasted text in history. After `utils::paste` returns `Ok`, call `after_paste`.
 
 **Commands** (`commands.rs`, registered in `lib.rs` `collect_commands!`): `learning_list_rules() -> Vec<Rule>`, `learning_update_rule(id, from, to, paused) -> Rule`, `learning_delete_rule(id)`, `learning_undo(rule_id)` (deletes a just-learned rule), `learning_swap(session_id: u64, application_index: usize) -> Result<(), String>` (Task 6 writer), `learning_from_history_edit(entry_id: i64, edited: String) -> Vec<Rule>` (compares against `pasted_text`, falling back to `post_processed_text` then `transcription_text`; stores `edited_text`; emits a history `Updated` event).
 
@@ -304,6 +318,7 @@ In `process_transcription_output`: when `settings.learning_enabled`, run `apply`
 **Files:** Create `src-tauri/src/learning/watcher_macos.rs` (`#[cfg(target_os = "macos")]`), a no-op `watcher_other.rs` for other platforms. Modify `Cargo.toml` (macOS target deps: `objc2-application-services` and `objc2-core-foundation` with the AXUIElement features — check the crate docs for exact feature names).
 
 **Produces:**
+
 ```rust
 pub trait FieldReader: Send { fn read(&self) -> Option<String>; fn is_secure(&self) -> bool; }
 pub fn focused_field() -> Option<Box<dyn FieldReader>>; // None when AX not trusted (AXIsProcessTrusted), no focused element, role AXSecureTextField, or no AXValue
@@ -311,6 +326,7 @@ pub fn replace_in_focused(original_region: &str, find: &str, replace_with: &str)
 pub fn spawn_watch(reader: Box<dyn FieldReader>, pasted: String, watch_for: Duration, secure_now: impl Fn() -> bool + Send + 'static, done: impl FnOnce(Option<String>) + Send + 'static) -> WatchHandle;
 pub struct WatchHandle { /* stop flag + join handle */ } impl WatchHandle { pub fn finish_now(self); }
 ```
+
 Loop: wait 250 ms after paste, read baseline → `Watch::start`. Then every 500 ms: if `secure_now()` (use `crate::secure_input` state) or `reader.is_secure()` → stop with `None` (RF5). Feed readings until `Finish` or timeout. Call `done` with the result. The focused element is captured once at start; if the focused element changes, feed `None`.
 
 - [ ] **Step 1: Failing test** (platform-independent, with a fake `FieldReader` whose readings come from a `Vec`): `spawn_watch` with readings `["send it to Calvin", "send it to Kelvin", "", ""]` calls `done(Some("send it to Kelvin"))`; with `secure_now = || true` calls `done(None)` (RF5). Use a short poll interval injected for tests (`spawn_watch_with_interval`).
@@ -324,11 +340,21 @@ Loop: wait 250 ms after paste, read baseline → `Watch::start`. Then every 500 
 **Files:** Create `src-tauri/src/learning/jev.rs`.
 
 API (verified 2026-10-09 from docs.typesafe.ai): `POST https://api.typesafe.ai/v1/systemone`, header `Authorization: Bearer <key>`, body:
+
 ```json
-{"model":"jev-latest","state":"push the fix to ___",
- "questions":{"word":{"type":"choice","instructions":"The sentence was dictated by speech recognition. Which option did the speaker say in the blank?",
-   "criteria":{"option_0":"Eres","option_1":"heiress"}}}}
+{
+  "model": "jev-latest",
+  "state": "push the fix to ___",
+  "questions": {
+    "word": {
+      "type": "choice",
+      "instructions": "The sentence was dictated by speech recognition. Which option did the speaker say in the blank?",
+      "criteria": { "option_0": "Eres", "option_1": "heiress" }
+    }
+  }
+}
 ```
+
 Response: `answers.word.probabilities.option_0` etc. Errors: 401, 422, 429, 529. Timeout 1500 ms; any error → `None` (fail open to the alternative notice).
 
 **Produces:** `pub struct JevDecider { key: String, client: reqwest::blocking::Client }` implementing `Decider`; `pub fn build_request(sentence: &str, options: &[String]) -> serde_json::Value`; `pub fn parse_probabilities(body: &serde_json::Value, n: usize) -> Option<Vec<f64>>`. The service builds a `JevDecider` only when `jev_api_key` is non-empty.
@@ -342,6 +368,7 @@ Response: `answers.word.probabilities.option_0` etc. Errors: 401, 422, 429, 529.
 **Files:** Create `src/notice/index.html`, `src/notice/main.tsx`, `src/notice/Notice.tsx`, `src/notice/Notice.css`; modify `vite.config.ts` (add `notice` input), `src-tauri/src/overlay.rs` or a new `src-tauri/src/learning/notice.rs` (create a second non-activating NSPanel "learning_notice", like `create_recording_overlay`, but it must accept mouse clicks), `src-tauri/tauri.conf.json`/capabilities if a new window label needs permissions.
 
 Behaviour:
+
 - Learned event → panel shows "Learned: Calvin → Kelvin" + **Undo** for 6 s. Undo calls `learning_undo(rule_id)`.
 - Ambiguous application → panel shows "heiress → Eres?" style: the pasted choice and the other option + **Swap** and the shortcut hint for 6 s. Swap calls `learning_swap(session_id, index)`; while visible, the `learning_swap` binding is registered.
 - Swap result: success → the rule gets a hit (alternative = `to`) or a miss (alternative = `original`); failure → copy the alternative to the clipboard and show "Could not swap. The other option is on the clipboard."
