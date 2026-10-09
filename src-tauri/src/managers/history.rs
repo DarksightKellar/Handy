@@ -355,8 +355,17 @@ impl HistoryManager {
     /// Stores the user's corrected version of the pasted text on an entry
     /// (the learning layer's history edit) and tells the frontend.
     pub fn set_edited_text(&self, id: i64, edited_text: &str) -> Result<HistoryEntry> {
+        self.write_edited_text(id, Some(edited_text))
+    }
+
+    /// Removes the stored edit, for an edit that put the pasted text back.
+    pub fn clear_edited_text(&self, id: i64) -> Result<HistoryEntry> {
+        self.write_edited_text(id, None)
+    }
+
+    fn write_edited_text(&self, id: i64, edited_text: Option<&str>) -> Result<HistoryEntry> {
         let conn = self.get_connection()?;
-        let entry = Self::set_edited_text_with_conn(&conn, id, edited_text)?;
+        let entry = Self::write_edited_text_with_conn(&conn, id, edited_text)?;
 
         if let Err(e) = (HistoryUpdatePayload::Updated {
             entry: entry.clone(),
@@ -369,10 +378,24 @@ impl HistoryManager {
         Ok(entry)
     }
 
+    #[cfg(test)]
     fn set_edited_text_with_conn(
         conn: &Connection,
         id: i64,
         edited_text: &str,
+    ) -> Result<HistoryEntry> {
+        Self::write_edited_text_with_conn(conn, id, Some(edited_text))
+    }
+
+    #[cfg(test)]
+    fn clear_edited_text_with_conn(conn: &Connection, id: i64) -> Result<HistoryEntry> {
+        Self::write_edited_text_with_conn(conn, id, None)
+    }
+
+    fn write_edited_text_with_conn(
+        conn: &Connection,
+        id: i64,
+        edited_text: Option<&str>,
     ) -> Result<HistoryEntry> {
         let updated = conn.execute(
             "UPDATE transcription_history SET edited_text = ?1 WHERE id = ?2",
@@ -783,6 +806,19 @@ mod tests {
             .expect("fetch latest entry")
             .expect("entry exists");
         assert_eq!(latest.edited_text.as_deref(), Some("send it to Kelvin."));
+    }
+
+    #[test]
+    fn clear_edited_text_removes_a_stale_edit() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "send it to Calvin", None);
+        HistoryManager::set_edited_text_with_conn(&conn, 1, "send it to Kelvin.")
+            .expect("set edited text");
+
+        let entry =
+            HistoryManager::clear_edited_text_with_conn(&conn, 1).expect("clear edited text");
+
+        assert_eq!(entry.edited_text, None);
     }
 
     #[test]

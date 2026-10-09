@@ -121,8 +121,18 @@ pub async fn learning_from_history_edit(
         .ok_or_else(|| format!("History entry {entry_id} not found"))?;
 
     let baseline = history_baseline(&entry).to_string();
-    // The same edit saved twice, or no edit at all, teaches nothing new.
-    if entry.edited_text.as_deref() == Some(edited.as_str()) || edited == baseline {
+    // The same edit saved twice teaches nothing new.
+    if entry.edited_text.as_deref() == Some(edited.as_str()) {
+        return Ok(Vec::new());
+    }
+    // An edit back to the pasted text teaches nothing, but it removes the old
+    // edit, so History shows what is now true.
+    if edited == baseline {
+        if entry.edited_text.is_some() {
+            history
+                .clear_edited_text(entry_id)
+                .map_err(|e| e.to_string())?;
+        }
         return Ok(Vec::new());
     }
 
