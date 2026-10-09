@@ -928,6 +928,97 @@ async isLaptop() : Promise<Result<boolean, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async learningListRules() : Promise<Result<Rule[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("learning_list_rules") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async learningUpdateRule(id: number, from: string, to: string, paused: boolean) : Promise<Result<Rule, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("learning_update_rule", { id, from, to, paused }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async learningDeleteRule(id: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("learning_delete_rule", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Undo of a "Learned" notice: removes the rule that was just learned.
+ */
+async learningUndo(ruleId: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("learning_undo", { ruleId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Swaps one word of the last paste for its other option. On failure the other
+ * option is on the clipboard and a `SwapFailed` notice was sent.
+ */
+async learningSwap(sessionId: number, applicationIndex: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("learning_swap", { sessionId, applicationIndex }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Learns from an edit made to a history entry in the history window, and
+ * stores the edit on the entry. Returns the rules this edit created.
+ */
+async learningFromHistoryEdit(entryId: number, edited: string) : Promise<Result<Rule[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("learning_from_history_edit", { entryId, edited }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeLearningEnabledSetting(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_learning_enabled_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeLearningWatchSecondsSetting(seconds: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_learning_watch_seconds_setting", { seconds }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeJevApiKeySetting(key: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_jev_api_key_setting", { key }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeJevConfidenceThresholdSetting(threshold: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_jev_confidence_threshold_setting", { threshold }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -936,10 +1027,12 @@ async isLaptop() : Promise<Result<boolean, string>> {
 
 export const events = __makeEvents__<{
 historyUpdatePayload: HistoryUpdatePayload,
+learningNotice: LearningNotice,
 streamPhaseEvent: StreamPhaseEvent,
 streamTextEvent: StreamTextEvent
 }>({
 historyUpdatePayload: "history-update-payload",
+learningNotice: "learning-notice",
 streamPhaseEvent: "stream-phase-event",
 streamTextEvent: "stream-text-event"
 })
@@ -1017,7 +1110,25 @@ vad_backend?: VadBackend;
  * not gated on this — that follows model capability. Migrated from the old
  * `overlay_position` (position `none` → style `None`).
  */
-overlay_style?: OverlayStyle }
+overlay_style?: OverlayStyle; 
+/**
+ * Learning layer: learn from corrections made to pasted text and apply
+ * them to later transcripts. See `docs/learning/DESIGN.md`.
+ */
+learning_enabled?: boolean; 
+/**
+ * How long (seconds) the text box is watched for a correction after a paste.
+ */
+learning_watch_seconds?: number; 
+/**
+ * Jev (TypeSafe AI) API key. Empty means no Jev; ambiguous words then
+ * get the best guess plus a swap notice.
+ */
+jev_api_key?: SecretString; 
+/**
+ * Jev must be at least this sure before its choice is used without a notice.
+ */
+jev_confidence_threshold?: number }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type AvailableAccelerators = { transcribe: string[]; ort: string[]; gpu_devices: GpuDeviceOption[] }
@@ -1041,7 +1152,15 @@ export type EngineType =
  */
 "TranscribeCpp" | "Parakeet" | "Moonshine" | "MoonshineStreaming" | "SenseVoice" | "GigaAM" | "Canary" | "Cohere"
 export type GpuDeviceOption = { id: string; name: string; total_vram_mb: number }
-export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean }
+export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean; 
+/**
+ * The text that was pasted (after learned rules and post-processing).
+ */
+pasted_text: string | null; 
+/**
+ * The user's corrected version of the pasted text, when they edited it.
+ */
+edited_text: string | null }
 export type HistoryUpdatePayload = { action: "added"; entry: HistoryEntry } | { action: "updated"; entry: HistoryEntry } | { action: "deleted"; id: number } | { action: "toggled"; id: number }
 /**
  * Result of changing keyboard implementation
@@ -1058,6 +1177,26 @@ export type KeyboardDiagnosticReport = { secure_input_enabled: boolean; culprit_
 key_down: number; key_up: number; flags_changed: number; mouse: number; duration_ms: number }
 export type KeyboardImplementation = "tauri" | "handy_keys"
 export type LLMPrompt = { id: string; name: string; prompt: string }
+/**
+ * One thing the user should be told about. Serialises with a `kind` tag, for
+ * example `{"kind":"Learned","rule_id":3,"from":"Calvin","to":"Kelvin"}`.
+ */
+export type LearningNotice = 
+/**
+ * A new rule was learned from an edit. The panel offers Undo
+ * (`learning_undo(rule_id)`).
+ */
+{ kind: "Learned"; rule_id: number; from: string; to: string } | 
+/**
+ * A rule was ambiguous and Handy pasted `chosen`. The panel offers
+ * `alternative` (`learning_swap(session_id, application_index)`).
+ */
+{ kind: "Alternative"; session_id: number; application_index: number; chosen: string; alternative: string } | 
+/**
+ * A swap could not be written into the text box. `alternative` is on the
+ * clipboard instead.
+ */
+{ kind: "SwapFailed"; alternative: string }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
 export type ModelInfo = { id: string; name: string; description: string; filename: string; source: ModelSource; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; is_directory: boolean; engine_type: EngineType; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean; supports_streaming: boolean; supports_language_detection: boolean }
 export type ModelLoadStatus = { is_loaded: boolean; current_model: string | null }
@@ -1100,7 +1239,14 @@ export type PasteMethod = "ctrl_v" | "direct" | "none" | "shift_insert" | "ctrl_
 export type PermissionAccess = "allowed" | "denied" | "unknown"
 export type PostProcessProvider = { id: string; label: string; base_url: string; allow_base_url_edit?: boolean; models_endpoint?: string | null; supports_structured_output?: boolean }
 export type RecordingRetentionPeriod = "never" | "preserve_limit" | "days_3" | "weeks_2" | "months_3"
+export type Rule = { id: number; from: string; to: string; kind: RuleKind; hits: number; misses: number; applied: number; paused: boolean; source_sentence: string; created_at: number; updated_at: number }
+export type RuleKind = "word" | "phrase" | "spelling"
 export type SecretMap = Partial<{ [key in string]: string }>
+/**
+ * A single secret value (an API key). It serialises as a plain string, but its
+ * `Debug` output never shows the value, so a logged `AppSettings` stays safe.
+ */
+export type SecretString = string
 export type SecureInputStatus = { 
 /**
  * Secure input is currently enabled (live check)

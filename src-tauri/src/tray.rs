@@ -596,8 +596,10 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
 
 fn last_transcript_text(entry: &HistoryEntry) -> &str {
     entry
-        .post_processed_text
+        .edited_text
         .as_deref()
+        .or(entry.pasted_text.as_deref())
+        .or(entry.post_processed_text.as_deref())
         .unwrap_or(&entry.transcription_text)
 }
 
@@ -682,6 +684,8 @@ mod tests {
             post_processed_text: post_processed.map(|text| text.to_string()),
             post_process_prompt: None,
             post_process_requested: false,
+            pasted_text: None,
+            edited_text: None,
         }
     }
 
@@ -701,6 +705,15 @@ mod tests {
     fn uses_post_processed_text_when_available() {
         let entry = build_entry("raw", Some("processed"));
         assert_eq!(last_transcript_text(&entry), "processed");
+    }
+
+    #[test]
+    fn prefers_what_was_pasted_and_then_the_users_edit() {
+        let mut entry = build_entry("raw", Some("processed"));
+        entry.pasted_text = Some("pasted".to_string());
+        assert_eq!(last_transcript_text(&entry), "pasted");
+        entry.edited_text = Some("edited".to_string());
+        assert_eq!(last_transcript_text(&entry), "edited");
     }
 
     #[test]

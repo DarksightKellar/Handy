@@ -68,6 +68,13 @@ impl Watch {
         }
     }
 
+    /// True when the last good reading shows the pasted text as pasted. The
+    /// watch then has nothing to learn from an edit, but it did see the text
+    /// survive, which confirms every fix Handy made in it.
+    pub fn is_unchanged(&self) -> bool {
+        self.last_region.as_deref() == Some(self.pasted.as_str())
+    }
+
     /// Ends the watch at the timeout.
     pub fn finish(self) -> Option<String> {
         self.result()
@@ -173,6 +180,16 @@ mod tests {
     fn paste_missing_from_field_does_not_start() {
         assert!(Watch::start("unrelated", "send it").is_none());
     }
+    #[test]
+    fn unchanged_text_is_reported_as_unchanged() {
+        let mut w = Watch::start("x hello Calvin y", "hello Calvin").unwrap();
+        assert!(!w.is_unchanged()); // nothing read yet
+        w.feed(Some("x hello Calvin y"));
+        assert!(w.is_unchanged());
+        w.feed(Some("x hello Kelvin y"));
+        assert!(!w.is_unchanged());
+    }
+
     #[test]
     fn unchanged_text_learns_nothing() {
         let w = Watch::start("hello there", "hello there").unwrap();

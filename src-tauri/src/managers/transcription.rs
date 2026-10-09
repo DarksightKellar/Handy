@@ -7,6 +7,8 @@ use crate::engine_supervisor::{
     DeviceInfo, DeviceSelector, EngineError, EngineSupervisor, LoadSpec, LoadedInfo,
     StreamProgress, Unloading,
 };
+use crate::learning::service::{merge_prompt_words, PROMPT_WORD_BUDGET};
+use crate::learning::LearningService;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{EngineType, ModelManager};
 use crate::settings::{
@@ -1286,11 +1288,23 @@ impl TranscriptionManager {
         // one (whisper family). Attaching the whisper run extension to a
         // non-whisper arch is rejected with INVALID_ARG, so skip it there and
         // let the fuzzy post-correction handle custom words instead.
-        let family = if settings.custom_words.is_empty() || !model_is_whisper {
+        // Words the learning layer has learned join the custom words, most used
+        // first, within a fixed word budget.
+        let prompt_words = if model_is_whisper && settings.learning_enabled {
+            let learned = self
+                .app_handle
+                .try_state::<Arc<LearningService>>()
+                .map(|service| service.prompt_words(PROMPT_WORD_BUDGET))
+                .unwrap_or_default();
+            merge_prompt_words(&settings.custom_words, learned)
+        } else {
+            settings.custom_words.clone()
+        };
+        let family = if prompt_words.is_empty() || !model_is_whisper {
             None
         } else {
             Some(RunExtension::Whisper(WhisperRunOptions {
-                initial_prompt: Some(settings.custom_words.join(", ")),
+                initial_prompt: Some(prompt_words.join(", ")),
                 ..Default::default()
             }))
         };

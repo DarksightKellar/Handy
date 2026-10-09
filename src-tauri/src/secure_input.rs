@@ -480,6 +480,11 @@ mod imp {
                 if id == "cancel" && !state.cancel_requested.load(Ordering::SeqCst) {
                     continue;
                 }
+                // The swap shortcut is a convenience for a short-lived notice
+                // (the notice's button does the same): it gets no Carbon shadow.
+                if id == "learning_swap" {
+                    continue;
+                }
                 if id == "transcribe_with_post_process" && !settings.post_process_enabled {
                     continue;
                 }

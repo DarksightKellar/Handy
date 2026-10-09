@@ -93,14 +93,18 @@ pub async fn retry_history_entry_transcription(
         return Err("Recording contains no speech".to_string());
     }
 
+    // A retry applies the learned rules to the new text, but nothing is pasted,
+    // so no watch starts and no notice appears.
     let processed =
         process_transcription_output(&app, &transcription, entry.post_process_requested).await;
+    let pasted_text = (!processed.final_text.is_empty()).then(|| processed.final_text.clone());
     history_manager
         .update_transcription(
             id,
             transcription,
             processed.post_processed_text,
             processed.post_process_prompt,
+            pasted_text,
         )
         .map(|_| ())
         .map_err(|e| e.to_string())

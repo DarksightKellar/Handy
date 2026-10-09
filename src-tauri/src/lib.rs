@@ -218,6 +218,20 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::TrayState::new());
 
+    // The learning layer fails open: without its service the app behaves like
+    // upstream Handy.
+    let learning_service = portable::app_data_dir(app_handle)
+        .map_err(|e| e.to_string())
+        .and_then(|dir| {
+            learning::LearningService::open(&dir.join("learning.db")).map_err(|e| e.to_string())
+        });
+    match learning_service {
+        Ok(service) => {
+            app_handle.manage(Arc::new(service));
+        }
+        Err(e) => log::error!("Learning layer is off: could not open its database: {e}"),
+    }
+
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
     // after permissions are confirmed (on macOS) or after onboarding completes.
@@ -623,34 +637,10 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
     0
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run(cli_args: CliArgs) {
-    // Avoid ggml-metal residency-set teardown assertions when a native engine
-    // outlives the Tauri shutdown sequence (#1902). This must happen before
-    // transcribe-cpp initializes its Metal device. Advanced users can restore
-    // upstream residency behavior with HANDY_METAL_RESIDENCY=1.
-    #[cfg(target_os = "macos")]
-    if std::env::var("HANDY_METAL_RESIDENCY").as_deref() == Ok("1") {
-        // ggml treats GGML_METAL_NO_RESIDENCY as presence-based, so remove an
-        // inherited value as well when explicitly opting back in.
-        std::env::remove_var("GGML_METAL_NO_RESIDENCY");
-    } else {
-        std::env::set_var("GGML_METAL_NO_RESIDENCY", "1");
-    }
-
-    // Pin glibc's dynamic mmap threshold before the first large allocation,
-    // so per-dictation transient buffers are returned to the OS on free
-    // instead of accumulating in malloc arenas (#1792). No-op off Linux/glibc.
-    memory::init_allocator();
-
-    // Detect portable mode before anything else
-    portable::init();
-
-    // Parse console logging directives from RUST_LOG, falling back to info-level logging
-    // when the variable is unset
-    let console_filter = build_console_filter();
-
-    let specta_builder = Builder::<tauri::Wry>::new()
+/// The command and event registry. `run` mounts it; the bindings test exports
+/// it to TypeScript.
+fn specta_builder() -> Builder<tauri::Wry> {
+    Builder::<tauri::Wry>::new()
         .commands(collect_commands![
             shortcut::change_binding,
             shortcut::reset_binding,
@@ -769,12 +759,53 @@ pub fn run(cli_args: CliArgs) {
             commands::history::update_history_limit,
             commands::history::update_recording_retention_period,
             helpers::clamshell::is_laptop,
+            learning::commands::learning_list_rules,
+            learning::commands::learning_update_rule,
+            learning::commands::learning_delete_rule,
+            learning::commands::learning_undo,
+            learning::commands::learning_swap,
+            learning::commands::learning_from_history_edit,
+            learning::commands::change_learning_enabled_setting,
+            learning::commands::change_learning_watch_seconds_setting,
+            learning::commands::change_jev_api_key_setting,
+            learning::commands::change_jev_confidence_threshold_setting,
         ])
         .events(collect_events![
             managers::history::HistoryUpdatePayload,
             managers::transcription::StreamTextEvent,
             managers::transcription::StreamPhaseEvent,
-        ]);
+            learning::notice::LearningNotice,
+        ])
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run(cli_args: CliArgs) {
+    // Avoid ggml-metal residency-set teardown assertions when a native engine
+    // outlives the Tauri shutdown sequence (#1902). This must happen before
+    // transcribe-cpp initializes its Metal device. Advanced users can restore
+    // upstream residency behavior with HANDY_METAL_RESIDENCY=1.
+    #[cfg(target_os = "macos")]
+    if std::env::var("HANDY_METAL_RESIDENCY").as_deref() == Ok("1") {
+        // ggml treats GGML_METAL_NO_RESIDENCY as presence-based, so remove an
+        // inherited value as well when explicitly opting back in.
+        std::env::remove_var("GGML_METAL_NO_RESIDENCY");
+    } else {
+        std::env::set_var("GGML_METAL_NO_RESIDENCY", "1");
+    }
+
+    // Pin glibc's dynamic mmap threshold before the first large allocation,
+    // so per-dictation transient buffers are returned to the OS on free
+    // instead of accumulating in malloc arenas (#1792). No-op off Linux/glibc.
+    memory::init_allocator();
+
+    // Detect portable mode before anything else
+    portable::init();
+
+    // Parse console logging directives from RUST_LOG, falling back to info-level logging
+    // when the variable is unset
+    let console_filter = build_console_filter();
+
+    let specta_builder = specta_builder();
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
     specta_builder
@@ -1126,4 +1157,40 @@ pub fn run(cli_args: CliArgs) {
         // could block quitting behind a hung model load.
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod bindings_tests {
+    use super::*;
+
+    /// `src/bindings.ts` is generated from the command and event registry when
+    /// a debug build starts. This test keeps the checked-in file honest without
+    /// starting the app: it fails when the registry and the file disagree.
+    /// Run `HANDY_EXPORT_BINDINGS=1 cargo test --lib bindings_are_current` to
+    /// rewrite the file.
+    #[test]
+    fn bindings_are_current() {
+        let checked_in =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/bindings.ts");
+        let target = if std::env::var_os("HANDY_EXPORT_BINDINGS").is_some() {
+            checked_in.clone()
+        } else {
+            std::env::temp_dir().join(format!("handy-bindings-{}.ts", std::process::id()))
+        };
+        specta_builder()
+            .export(
+                Typescript::default().bigint(BigIntExportBehavior::Number),
+                &target,
+            )
+            .expect("export typescript bindings");
+        if target != checked_in {
+            let exported = std::fs::read_to_string(&target).expect("read exported bindings");
+            let _ = std::fs::remove_file(&target);
+            let current = std::fs::read_to_string(&checked_in).expect("read src/bindings.ts");
+            assert!(
+                exported == current,
+                "src/bindings.ts is out of date. Run: HANDY_EXPORT_BINDINGS=1 cargo test --lib bindings_are_current"
+            );
+        }
+    }
 }

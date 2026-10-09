@@ -31,7 +31,17 @@ static MIGRATIONS: &[M] = &[
     M::up("ALTER TABLE transcription_history ADD COLUMN post_processed_text TEXT;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_prompt TEXT;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_requested BOOLEAN NOT NULL DEFAULT 0;"),
+    // Learning layer: the text actually pasted (after learned rules and
+    // post-processing), and the user's corrected version of it.
+    M::up("ALTER TABLE transcription_history ADD COLUMN pasted_text TEXT;"),
+    M::up("ALTER TABLE transcription_history ADD COLUMN edited_text TEXT;"),
 ];
+
+/// Every column of `transcription_history`, in the order `map_history_entry`
+/// reads them by name. Each SELECT uses this list so a new column cannot be
+/// forgotten in one query.
+const HISTORY_COLUMNS: &str = "id, file_name, timestamp, saved, title, transcription_text, \
+     post_processed_text, post_process_prompt, post_process_requested, pasted_text, edited_text";
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
 pub struct PaginatedHistory {
@@ -63,6 +73,10 @@ pub struct HistoryEntry {
     pub post_processed_text: Option<String>,
     pub post_process_prompt: Option<String>,
     pub post_process_requested: bool,
+    /// The text that was pasted (after learned rules and post-processing).
+    pub pasted_text: Option<String>,
+    /// The user's corrected version of the pasted text, when they edited it.
+    pub edited_text: Option<String>,
 }
 
 pub struct HistoryManager {
@@ -207,6 +221,8 @@ impl HistoryManager {
             post_processed_text: row.get("post_processed_text")?,
             post_process_prompt: row.get("post_process_prompt")?,
             post_process_requested: row.get("post_process_requested")?,
+            pasted_text: row.get("pasted_text")?,
+            edited_text: row.get("edited_text")?,
         })
     }
 
@@ -223,6 +239,7 @@ impl HistoryManager {
         post_process_requested: bool,
         post_processed_text: Option<String>,
         post_process_prompt: Option<String>,
+        pasted_text: Option<String>,
     ) -> Result<HistoryEntry> {
         let timestamp = Utc::now().timestamp();
         let title = self.format_timestamp_title(timestamp);
@@ -237,8 +254,9 @@ impl HistoryManager {
                 transcription_text,
                 post_processed_text,
                 post_process_prompt,
-                post_process_requested
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                post_process_requested,
+                pasted_text
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &file_name,
                 timestamp,
@@ -248,6 +266,7 @@ impl HistoryManager {
                 &post_processed_text,
                 &post_process_prompt,
                 post_process_requested,
+                &pasted_text,
             ],
         )?;
 
@@ -261,6 +280,8 @@ impl HistoryManager {
             post_processed_text,
             post_process_prompt,
             post_process_requested,
+            pasted_text,
+            edited_text: None,
         };
 
         debug!("Saved history entry with id {}", entry.id);
@@ -286,18 +307,24 @@ impl HistoryManager {
         transcription_text: String,
         post_processed_text: Option<String>,
         post_process_prompt: Option<String>,
+        pasted_text: Option<String>,
     ) -> Result<HistoryEntry> {
         let conn = self.get_connection()?;
+        // A retry replaces the output, so an edit of the old output no longer
+        // describes this entry: `edited_text` is cleared with it.
         let updated = conn.execute(
             "UPDATE transcription_history
              SET transcription_text = ?1,
                  post_processed_text = ?2,
-                 post_process_prompt = ?3
-             WHERE id = ?4",
+                 post_process_prompt = ?3,
+                 pasted_text = ?4,
+                 edited_text = NULL
+             WHERE id = ?5",
             params![
                 transcription_text,
                 post_processed_text,
                 post_process_prompt,
+                pasted_text,
                 id
             ],
         )?;
@@ -306,13 +333,11 @@ impl HistoryManager {
             return Err(anyhow!("History entry {} not found", id));
         }
 
-        let entry = conn
-            .query_row(
-                "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
-                 FROM transcription_history WHERE id = ?1",
-                params![id],
-                Self::map_history_entry,
-            )?;
+        let entry = conn.query_row(
+            &format!("SELECT {HISTORY_COLUMNS} FROM transcription_history WHERE id = ?1"),
+            params![id],
+            Self::map_history_entry,
+        )?;
 
         debug!("Updated transcription for history entry {}", id);
 
@@ -325,6 +350,42 @@ impl HistoryManager {
         }
 
         Ok(entry)
+    }
+
+    /// Stores the user's corrected version of the pasted text on an entry
+    /// (the learning layer's history edit) and tells the frontend.
+    pub fn set_edited_text(&self, id: i64, edited_text: &str) -> Result<HistoryEntry> {
+        let conn = self.get_connection()?;
+        let entry = Self::set_edited_text_with_conn(&conn, id, edited_text)?;
+
+        if let Err(e) = (HistoryUpdatePayload::Updated {
+            entry: entry.clone(),
+        })
+        .emit(&self.app_handle)
+        {
+            error!("Failed to emit history-updated event: {}", e);
+        }
+
+        Ok(entry)
+    }
+
+    fn set_edited_text_with_conn(
+        conn: &Connection,
+        id: i64,
+        edited_text: &str,
+    ) -> Result<HistoryEntry> {
+        let updated = conn.execute(
+            "UPDATE transcription_history SET edited_text = ?1 WHERE id = ?2",
+            params![edited_text, id],
+        )?;
+        if updated == 0 {
+            return Err(anyhow!("History entry {} not found", id));
+        }
+        Ok(conn.query_row(
+            &format!("SELECT {HISTORY_COLUMNS} FROM transcription_history WHERE id = ?1"),
+            params![id],
+            Self::map_history_entry,
+        )?)
     }
 
     pub fn cleanup_old_entries(&self) -> Result<()> {
@@ -458,13 +519,13 @@ impl HistoryManager {
         let mut entries: Vec<HistoryEntry> = match (cursor, limit) {
             (Some(cursor_id), Some(lim)) => {
                 let fetch_count = (lim + 1) as i64;
-                let mut stmt = conn.prepare(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {HISTORY_COLUMNS}
                      FROM transcription_history
                      WHERE id < ?1
                      ORDER BY id DESC
-                     LIMIT ?2",
-                )?;
+                     LIMIT ?2"
+                ))?;
                 let result = stmt
                     .query_map(params![cursor_id, fetch_count], Self::map_history_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -472,23 +533,23 @@ impl HistoryManager {
             }
             (None, Some(lim)) => {
                 let fetch_count = (lim + 1) as i64;
-                let mut stmt = conn.prepare(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {HISTORY_COLUMNS}
                      FROM transcription_history
                      ORDER BY id DESC
-                     LIMIT ?1",
-                )?;
+                     LIMIT ?1"
+                ))?;
                 let result = stmt
                     .query_map(params![fetch_count], Self::map_history_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 result
             }
             (_, None) => {
-                let mut stmt = conn.prepare(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {HISTORY_COLUMNS}
                      FROM transcription_history
-                     ORDER BY id DESC",
-                )?;
+                     ORDER BY id DESC"
+                ))?;
                 let result = stmt
                     .query_map([], Self::map_history_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -506,21 +567,9 @@ impl HistoryManager {
 
     #[cfg(test)]
     fn get_latest_entry_with_conn(conn: &Connection) -> Result<Option<HistoryEntry>> {
-        let mut stmt = conn.prepare(
-            "SELECT
-                id,
-                file_name,
-                timestamp,
-                saved,
-                title,
-                transcription_text,
-                post_processed_text,
-                post_process_prompt,
-                post_process_requested
-             FROM transcription_history
-             ORDER BY timestamp DESC
-             LIMIT 1",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {HISTORY_COLUMNS} FROM transcription_history ORDER BY timestamp DESC LIMIT 1"
+        ))?;
 
         let entry = stmt.query_row([], Self::map_history_entry).optional()?;
         Ok(entry)
@@ -533,22 +582,9 @@ impl HistoryManager {
     }
 
     fn get_latest_completed_entry_with_conn(conn: &Connection) -> Result<Option<HistoryEntry>> {
-        let mut stmt = conn.prepare(
-            "SELECT
-                id,
-                file_name,
-                timestamp,
-                saved,
-                title,
-                transcription_text,
-                post_processed_text,
-                post_process_prompt,
-                post_process_requested
-             FROM transcription_history
-             WHERE transcription_text != ''
-             ORDER BY timestamp DESC
-             LIMIT 1",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {HISTORY_COLUMNS} FROM transcription_history WHERE transcription_text != '' ORDER BY timestamp DESC LIMIT 1"
+        ))?;
 
         let entry = stmt.query_row([], Self::map_history_entry).optional()?;
         Ok(entry)
@@ -587,20 +623,9 @@ impl HistoryManager {
 
     pub async fn get_entry_by_id(&self, id: i64) -> Result<Option<HistoryEntry>> {
         let conn = self.get_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT
-                id,
-                file_name,
-                timestamp,
-                saved,
-                title,
-                transcription_text,
-                post_processed_text,
-                post_process_prompt,
-                post_process_requested
-             FROM transcription_history
-             WHERE id = ?1",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {HISTORY_COLUMNS} FROM transcription_history WHERE id = ?1"
+        ))?;
 
         let entry = stmt.query_row([id], Self::map_history_entry).optional()?;
 
@@ -654,22 +679,13 @@ mod tests {
     use super::*;
     use rusqlite::{params, Connection};
 
+    /// The real schema, built by the real migrations, so a column added in
+    /// `MIGRATIONS` can never be missing from the test database.
     fn setup_conn() -> Connection {
-        let conn = Connection::open_in_memory().expect("open in-memory db");
-        conn.execute_batch(
-            "CREATE TABLE transcription_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                file_name TEXT NOT NULL,
-                timestamp INTEGER NOT NULL,
-                saved BOOLEAN NOT NULL DEFAULT 0,
-                title TEXT NOT NULL,
-                transcription_text TEXT NOT NULL,
-                post_processed_text TEXT,
-                post_process_prompt TEXT,
-                post_process_requested BOOLEAN NOT NULL DEFAULT 0
-            );",
-        )
-        .expect("create transcription_history table");
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        Migrations::new(MIGRATIONS.to_vec())
+            .to_latest(&mut conn)
+            .expect("run history migrations");
         conn
     }
 
@@ -733,5 +749,45 @@ mod tests {
 
         assert_eq!(entry.timestamp, 100);
         assert_eq!(entry.transcription_text, "completed");
+    }
+
+    #[test]
+    fn new_entries_have_no_pasted_or_edited_text() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "first", None);
+
+        let entry = HistoryManager::get_latest_entry_with_conn(&conn)
+            .expect("fetch latest entry")
+            .expect("entry exists");
+
+        assert_eq!(entry.pasted_text, None);
+        assert_eq!(entry.edited_text, None);
+    }
+
+    #[test]
+    fn set_edited_text_stores_the_edit_and_keeps_the_pasted_text() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "send it to Calvin", None);
+        conn.execute(
+            "UPDATE transcription_history SET pasted_text = ?1",
+            params!["send it to Calvin."],
+        )
+        .expect("set pasted text");
+
+        let entry = HistoryManager::set_edited_text_with_conn(&conn, 1, "send it to Kelvin.")
+            .expect("set edited text");
+
+        assert_eq!(entry.pasted_text.as_deref(), Some("send it to Calvin."));
+        assert_eq!(entry.edited_text.as_deref(), Some("send it to Kelvin."));
+        let latest = HistoryManager::get_latest_entry_with_conn(&conn)
+            .expect("fetch latest entry")
+            .expect("entry exists");
+        assert_eq!(latest.edited_text.as_deref(), Some("send it to Kelvin."));
+    }
+
+    #[test]
+    fn set_edited_text_on_a_missing_entry_is_an_error() {
+        let conn = setup_conn();
+        assert!(HistoryManager::set_edited_text_with_conn(&conn, 42, "x").is_err());
     }
 }

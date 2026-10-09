@@ -365,6 +365,41 @@ impl std::ops::DerefMut for SecretMap {
     }
 }
 
+/// A single secret value (an API key). It serialises as a plain string, but its
+/// `Debug` output never shows the value, so a logged `AppSettings` stays safe.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(transparent)]
+pub(crate) struct SecretString(String);
+
+impl From<&str> for SecretString {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl std::ops::Deref for SecretString {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "\"\""
+        } else {
+            "[REDACTED]"
+        })
+    }
+}
+
 /* still handy for composing the initial JSON in the store ------------- */
 /// The container-level `serde(default)` (backed by the `Default` impl below)
 /// guarantees every field — including ones added in the future — falls back to
@@ -530,6 +565,20 @@ pub struct AppSettings {
     /// `overlay_position` (position `none` → style `None`).
     #[serde(default = "default_overlay_style")]
     pub overlay_style: OverlayStyle,
+    /// Learning layer: learn from corrections made to pasted text and apply
+    /// them to later transcripts. See `docs/learning/DESIGN.md`.
+    #[serde(default = "default_learning_enabled")]
+    pub learning_enabled: bool,
+    /// How long (seconds) the text box is watched for a correction after a paste.
+    #[serde(default = "default_learning_watch_seconds")]
+    pub learning_watch_seconds: u32,
+    /// Jev (TypeSafe AI) API key. Empty means no Jev; ambiguous words then
+    /// get the best guess plus a swap notice.
+    #[serde(default)]
+    pub jev_api_key: SecretString,
+    /// Jev must be at least this sure before its choice is used without a notice.
+    #[serde(default = "default_jev_confidence_threshold")]
+    pub jev_confidence_threshold: f64,
 }
 
 fn default_model() -> String {
@@ -591,6 +640,18 @@ fn default_overlay_style() -> OverlayStyle {
     return OverlayStyle::None;
     #[cfg(not(target_os = "linux"))]
     return OverlayStyle::Live;
+}
+
+fn default_learning_enabled() -> bool {
+    true
+}
+
+fn default_learning_watch_seconds() -> u32 {
+    30
+}
+
+fn default_jev_confidence_threshold() -> f64 {
+    0.8
 }
 
 fn default_vad_enabled() -> bool {
@@ -928,6 +989,22 @@ pub fn get_default_settings() -> AppSettings {
             current_binding: "escape".to_string(),
         },
     );
+    // Dynamic like "cancel": registered only while a swap notice is visible.
+    #[cfg(target_os = "macos")]
+    let default_swap_shortcut = "ctrl+option+s";
+    #[cfg(not(target_os = "macos"))]
+    let default_swap_shortcut = "ctrl+alt+s";
+    bindings.insert(
+        "learning_swap".to_string(),
+        ShortcutBinding {
+            id: "learning_swap".to_string(),
+            name: "Swap learned word".to_string(),
+            description: "Swaps a learned word for the other option while its notice is shown."
+                .to_string(),
+            default_binding: default_swap_shortcut.to_string(),
+            current_binding: default_swap_shortcut.to_string(),
+        },
+    );
 
     AppSettings {
         settings_schema_version: default_settings_schema_version(),
@@ -993,6 +1070,10 @@ pub fn get_default_settings() -> AppSettings {
         vad_enabled: default_vad_enabled(),
         vad_backend: VadBackend::default(),
         overlay_style: default_overlay_style(),
+        learning_enabled: default_learning_enabled(),
+        learning_watch_seconds: default_learning_watch_seconds(),
+        jev_api_key: SecretString::default(),
+        jev_confidence_threshold: default_jev_confidence_threshold(),
     }
 }
 
@@ -1780,6 +1861,67 @@ mod tests {
         assert!(!debug_output.contains("sk-proj-secret-key-12345"));
         assert!(!debug_output.contains("sk-ant-secret-key-67890"));
         assert!(debug_output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn learning_settings_default_values() {
+        let settings = get_default_settings();
+        assert!(settings.learning_enabled);
+        assert_eq!(settings.learning_watch_seconds, 30);
+        assert!(settings.jev_api_key.is_empty());
+        assert_eq!(settings.jev_confidence_threshold, 0.8);
+    }
+
+    #[test]
+    fn learning_settings_are_in_the_default_store_json() {
+        let json = default_settings_json();
+        for key in [
+            "learning_enabled",
+            "learning_watch_seconds",
+            "jev_api_key",
+            "jev_confidence_threshold",
+        ] {
+            assert!(json.get(key).is_some(), "missing key {key}");
+        }
+    }
+
+    #[test]
+    fn a_store_from_before_the_learning_layer_gets_its_defaults() {
+        let mut stored = default_settings_json();
+        let map = stored.as_object_mut().unwrap();
+        for key in [
+            "learning_enabled",
+            "learning_watch_seconds",
+            "jev_api_key",
+            "jev_confidence_threshold",
+        ] {
+            map.remove(key);
+        }
+        let settings: AppSettings =
+            serde_json::from_value(stored).expect("old stores must keep parsing");
+        assert!(settings.learning_enabled);
+        assert_eq!(settings.learning_watch_seconds, 30);
+        assert_eq!(settings.jev_confidence_threshold, 0.8);
+    }
+
+    #[test]
+    fn learning_swap_is_a_default_binding() {
+        let binding = &get_default_settings().bindings["learning_swap"];
+        assert_eq!(binding.id, "learning_swap");
+        #[cfg(target_os = "macos")]
+        assert_eq!(binding.default_binding, "ctrl+option+s");
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(binding.default_binding, "ctrl+alt+s");
+        assert_eq!(binding.current_binding, binding.default_binding);
+    }
+
+    #[test]
+    fn jev_api_key_is_redacted_in_debug_output() {
+        let mut settings = get_default_settings();
+        settings.jev_api_key = SecretString::from("jev-secret-key-123");
+        let out = format!("{:?}", settings);
+        assert!(!out.contains("jev-secret-key-123"));
+        assert!(out.contains("[REDACTED]"));
     }
 
     #[test]

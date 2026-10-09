@@ -1,9 +1,16 @@
 //! The learning layer: Handy learns from the corrections made to pasted text.
 //! See `docs/learning/DESIGN.md`.
 
-// Task 5 wires this module into the rest of the app; until then nothing outside
-// the module (and its tests) calls it.
+// Pieces of the layer that later tasks connect (the watcher, the frontend) are
+// not all called yet.
 #![allow(dead_code)]
 
+pub mod commands;
 pub mod core;
+pub mod notice;
+#[path = "watcher_other.rs"]
+mod platform;
+pub mod service;
 pub mod store;
+
+pub use service::LearningService;

@@ -249,7 +249,16 @@ pub fn observe(
     }
 
     for (app, was_touched) in applications.iter().zip(&touched) {
-        if !was_touched {
+        if *was_touched {
+            continue;
+        }
+        // A fix left alone confirms the rule. When an ambiguous rule pasted
+        // the original text instead, leaving it alone counts against the rule.
+        if app.alternative.is_some()
+            && normalize_phrase(&app.chosen) == normalize_phrase(&app.original)
+        {
+            out.push(Observation::Miss(app.rule_id));
+        } else {
             out.push(Observation::Hit(app.rule_id));
         }
     }
@@ -379,6 +388,20 @@ mod tests {
             [Observation::Hit(1)]
         ));
     }
+    #[test]
+    fn kept_original_on_an_ambiguous_rule_is_a_miss() {
+        // p = 1/3: the original was pasted and the fix offered. Leaving the
+        // original alone is evidence against the rule, not for it.
+        let rules = [rule(1, "heiress", "Eres", 1, 2)];
+        let a = apply("the heiress inherited", &rules, None, 0.8);
+        assert_eq!(a.text, "the heiress inherited");
+        assert_eq!(a.applications[0].alternative.as_deref(), Some("Eres"));
+        assert!(matches!(
+            observe(&a.text, &a.text, &a.applications, &rules).as_slice(),
+            [Observation::Miss(1)]
+        ));
+    }
+
     #[test]
     fn ambiguous_without_decider_offers_alternative() {
         let a = apply(

@@ -56,6 +56,77 @@ pub fn init_shortcuts(app: &AppHandle) {
     }
 }
 
+/// Bindings that are registered on demand and never by the generic loops that
+/// register every binding at startup, after a rebind or after shortcut
+/// recording: "cancel" (while recording) and "learning_swap" (while a swap
+/// notice is visible).
+pub fn is_dynamic_binding(id: &str) -> bool {
+    matches!(id, "cancel" | "learning_swap")
+}
+
+/// Whether a swap notice currently wants the swap shortcut.
+static SWAP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the swap shortcut is actually registered with the backend. The lock
+/// also serializes reconciliation passes.
+#[cfg(not(target_os = "linux"))]
+static SWAP_REGISTERED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+/// Register the swap shortcut (called when a swap notice is shown).
+pub fn register_swap_shortcut(app: &AppHandle) {
+    SWAP_REQUESTED.store(true, Ordering::SeqCst);
+    schedule_swap_reconcile(app);
+}
+
+/// Unregister the swap shortcut (called when the swap notice is gone).
+pub fn unregister_swap_shortcut(app: &AppHandle) {
+    SWAP_REQUESTED.store(false, Ordering::SeqCst);
+    schedule_swap_reconcile(app);
+}
+
+/// Same scheme as the cancel shortcut: the latest request wins, whatever order
+/// the spawned tasks run in.
+fn schedule_swap_reconcile(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        reconcile_swap_shortcut(&app);
+    });
+}
+
+fn reconcile_swap_shortcut(app: &AppHandle) {
+    // Dynamic shortcut registration is unstable on Linux (see the cancel
+    // shortcut); the notice's Swap button still works there.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = app;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut registered = SWAP_REGISTERED.lock().unwrap_or_else(|e| e.into_inner());
+        let requested = SWAP_REQUESTED.load(Ordering::SeqCst);
+        if requested == *registered {
+            return;
+        }
+
+        let Some(swap_binding) = get_settings(app).bindings.get("learning_swap").cloned() else {
+            return;
+        };
+
+        if requested {
+            match register_shortcut(app, swap_binding) {
+                Ok(()) => *registered = true,
+                Err(e) => error!("Failed to register swap shortcut: {}", e),
+            }
+        } else {
+            match unregister_shortcut(app, swap_binding) {
+                Ok(()) => *registered = false,
+                Err(e) => error!("Failed to unregister swap shortcut: {}", e),
+            }
+        }
+    }
+}
+
 /// Whether the recording lifecycle currently wants the cancel shortcut.
 /// Written synchronously by start/stop, so it always holds the latest request.
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -201,7 +272,7 @@ pub fn change_binding(
 
     // If this is the cancel binding, just update the settings and return
     // It's managed dynamically, so we don't register/unregister here
-    if id == "cancel" {
+    if is_dynamic_binding(&id) {
         if let Some(mut b) = settings.bindings.get(&id).cloned() {
             b.current_binding = binding;
             settings.bindings.insert(id.clone(), b.clone());
@@ -280,11 +351,11 @@ pub fn reset_binding(app: AppHandle, id: String) -> Result<BindingResponse, Stri
 
 /// Unregister every binding while the user is recording a new shortcut in
 /// the UI, so no existing shortcut can fire — or swallow the keystrokes —
-/// mid-capture. The "cancel" binding is untouched: it is managed dynamically
-/// by the recording lifecycle.
+/// mid-capture. The dynamic bindings ("cancel", "learning_swap") are untouched:
+/// they are registered only while recording or while a swap notice is shown.
 pub fn suspend_all_shortcuts(app: &AppHandle) {
     for (id, binding) in settings::get_bindings(app) {
-        if id == "cancel" {
+        if is_dynamic_binding(&id) {
             continue;
         }
         if let Err(e) = unregister_shortcut(app, binding) {
@@ -302,7 +373,7 @@ pub fn suspend_all_shortcuts(app: &AppHandle) {
 pub fn resume_all_shortcuts(app: &AppHandle) {
     let settings = get_settings(app);
     for (id, binding) in &settings.bindings {
-        if id == "cancel" {
+        if is_dynamic_binding(id) {
             continue;
         }
         if id == "transcribe_with_post_process" && !settings.post_process_enabled {
@@ -462,8 +533,8 @@ fn unregister_all_shortcuts(app: &AppHandle, implementation: KeyboardImplementat
     let bindings = settings::get_bindings(app);
 
     for (id, binding) in bindings {
-        // Skip cancel shortcut as it's dynamically registered
-        if id == "cancel" {
+        // Skip dynamically registered shortcuts (cancel, learning swap)
+        if is_dynamic_binding(&id) {
             continue;
         }
 
@@ -491,8 +562,8 @@ fn register_all_shortcuts_for_implementation(
     let mut current_settings = settings::get_settings(app);
 
     for (id, default_binding) in &default_bindings {
-        // Skip cancel shortcut as it's dynamically registered
-        if id == "cancel" {
+        // Skip dynamically registered shortcuts (cancel, learning swap)
+        if is_dynamic_binding(id) {
             continue;
         }
 

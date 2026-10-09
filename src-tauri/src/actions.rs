@@ -2,6 +2,8 @@
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error, VadPolicy};
+use crate::learning::core::learner::Applied;
+use crate::learning::LearningService;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
@@ -348,6 +350,30 @@ pub(crate) struct ProcessedTranscription {
     pub final_text: String,
     pub post_processed_text: Option<String>,
     pub post_process_prompt: Option<String>,
+    /// The learned fixes in `final_text`. `None` when the learning layer is off
+    /// or unavailable.
+    pub learning: Option<Applied>,
+}
+
+/// Applies the learned rules to `text` off the async runtime (the Jev decider
+/// blocks on the network). Any failure leaves the text as it was.
+async fn apply_learned_rules(
+    app: &AppHandle,
+    settings: &AppSettings,
+    text: &str,
+) -> Option<Applied> {
+    if !settings.learning_enabled {
+        return None;
+    }
+    let service = Arc::clone(&*app.try_state::<Arc<LearningService>>()?);
+    let (settings, text) = (settings.clone(), text.to_string());
+    match tauri::async_runtime::spawn_blocking(move || service.apply(&settings, &text)).await {
+        Ok(applied) => Some(applied),
+        Err(e) => {
+            warn!("Applying learned rules failed; using the text as it is: {e}");
+            None
+        }
+    }
 }
 
 pub(crate) async fn process_transcription_output(
@@ -359,6 +385,12 @@ pub(crate) async fn process_transcription_output(
     let mut final_text = transcription.to_string();
     let mut post_processed_text: Option<String> = None;
     let mut post_process_prompt: Option<String> = None;
+
+    // Learned rules come first, so the optional LLM pass sees the fixed text.
+    let mut learning = apply_learned_rules(app, &settings, &final_text).await;
+    if let Some(applied) = &learning {
+        final_text = applied.text.clone();
+    }
 
     if post_process {
         if let Some(processed_text) = post_process_transcription(&settings, &final_text).await {
@@ -377,10 +409,20 @@ pub(crate) async fn process_transcription_output(
         }
     }
 
+    // The positions of the fixes only hold for the text the rules produced. A
+    // post-processing pass rewrites that text, so its fixes can no longer be
+    // tracked (the watch still learns new rules from edits).
+    if post_processed_text.is_some() {
+        if let Some(applied) = learning.as_mut() {
+            applied.applications.clear();
+        }
+    }
+
     ProcessedTranscription {
         final_text,
         post_processed_text,
         post_process_prompt,
+        learning,
     }
 }
 
@@ -725,15 +767,19 @@ impl ShortcutAction for TranscribeAction {
                             }
 
                             // Save to history if WAV was saved
+                            let mut history_id = None;
                             if wav_saved {
-                                if let Err(err) = hm.save_entry(
+                                match hm.save_entry(
                                     file_name,
                                     transcription,
                                     post_process,
                                     processed.post_processed_text.clone(),
                                     processed.post_process_prompt.clone(),
+                                    (!processed.final_text.is_empty())
+                                        .then(|| processed.final_text.clone()),
                                 ) {
-                                    error!("Failed to save history entry: {}", err);
+                                    Ok(entry) => history_id = Some(entry.id),
+                                    Err(err) => error!("Failed to save history entry: {}", err),
                                 }
                             }
 
@@ -744,6 +790,18 @@ impl ShortcutAction for TranscribeAction {
                                 let ah_clone = ah.clone();
                                 let paste_time = Instant::now();
                                 let final_text = processed.final_text;
+                                // The learning layer follows the paste: it needs
+                                // the pasted text and the fixes made in it.
+                                let learning_session = processed.learning.and_then(|applied| {
+                                    let service =
+                                        Arc::clone(&*ah.try_state::<Arc<LearningService>>()?);
+                                    let session = service.new_session(
+                                        final_text.clone(),
+                                        applied.applications,
+                                        history_id,
+                                    );
+                                    Some((service, session))
+                                });
                                 let rm_for_paste = Arc::clone(&rm);
                                 ah.run_on_main_thread(move || {
                                     if rm_for_paste.was_cancelled_since(cancel_generation) {
@@ -754,10 +812,15 @@ impl ShortcutAction for TranscribeAction {
                                     }
 
                                     match utils::paste(final_text, ah_clone.clone()) {
-                                        Ok(()) => debug!(
-                                            "Text pasted successfully in {:?}",
-                                            paste_time.elapsed()
-                                        ),
+                                        Ok(()) => {
+                                            debug!(
+                                                "Text pasted successfully in {:?}",
+                                                paste_time.elapsed()
+                                            );
+                                            if let Some((service, session)) = learning_session {
+                                                service.after_paste(&ah_clone, session);
+                                            }
+                                        }
                                         Err(e) => {
                                             error!("Failed to paste transcription: {}", e);
                                             let _ = ah_clone.emit("paste-error", ());
@@ -795,6 +858,7 @@ impl ShortcutAction for TranscribeAction {
                                     post_process,
                                     None,
                                     None,
+                                    None,
                                 ) {
                                     error!("Failed to save failed history entry: {}", save_err);
                                 }
@@ -830,6 +894,23 @@ impl ShortcutAction for CancelAction {
 
     fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
         // Nothing to do on stop for cancel
+    }
+}
+
+// Learning swap: swaps the learned word of the last paste for its other option.
+// Registered only while a swap notice is visible.
+struct LearningSwapAction;
+
+impl ShortcutAction for LearningSwapAction {
+    fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        match app.try_state::<Arc<LearningService>>() {
+            Some(service) => service.swap_next_in_app(app),
+            None => debug!("Swap shortcut pressed, but the learning layer is not available"),
+        }
+    }
+
+    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        // Nothing to do on release
     }
 }
 
@@ -872,6 +953,10 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     map.insert(
         "cancel".to_string(),
         Arc::new(CancelAction) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "learning_swap".to_string(),
+        Arc::new(LearningSwapAction) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "test".to_string(),
