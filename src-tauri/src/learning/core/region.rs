@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use super::diff::trim_insertions;
 use super::text::tokenize;
 
 /// Characters of context kept on each side of the pasted region.
@@ -107,6 +108,10 @@ impl Watch {
                 .find_map(|from| self.find_end(reading, from).map(|r| (from, r)))
                 .map(|(from, end)| &reading[from..from + end.len()])
         }?;
+        // With no text on a side of the paste, its anchor matches anything and
+        // the region runs on to the end (or back to the start) of the box. Words
+        // typed there are not part of the paste.
+        let region = trim_insertions(&self.pasted, region);
         (!region.trim().is_empty() && self.resembles_paste(region)).then_some(region)
     }
 
@@ -303,5 +308,29 @@ mod tests {
         let mut w = Watch::start("Calvin", "Calvin").unwrap();
         assert_eq!(w.feed(Some("Kelvin")), WatchStep::Continue);
         assert_eq!(w.finish().as_deref(), Some("Kelvin"));
+    }
+
+    #[test]
+    fn text_typed_after_the_paste_is_not_part_of_the_region() {
+        // The paste was last in the box, so the after-anchor is empty.
+        let mut w = Watch::start("send it to Calvin today", "send it to Calvin today").unwrap();
+        w.feed(Some("send it to Kelvin today and then I typed more"));
+        assert_eq!(w.finish().as_deref(), Some("send it to Kelvin today"));
+    }
+
+    #[test]
+    fn text_typed_after_an_unedited_paste_is_not_an_edit() {
+        let mut w = Watch::start("send it to Calvin today", "send it to Calvin today").unwrap();
+        w.feed(Some("send it to Calvin today and then I typed more"));
+        assert!(w.is_unchanged());
+        assert_eq!(w.finish(), None);
+    }
+
+    #[test]
+    fn text_typed_before_the_paste_is_not_part_of_the_region() {
+        // The paste was first in the box, so the before-anchor is empty.
+        let mut w = Watch::start("send it to Calvin today", "send it to Calvin today").unwrap();
+        w.feed(Some("note to self send it to Kelvin today"));
+        assert_eq!(w.finish().as_deref(), Some("send it to Kelvin today"));
     }
 }

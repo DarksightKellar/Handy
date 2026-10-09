@@ -16,6 +16,7 @@ use anyhow::Result;
 use log::{debug, warn};
 use tauri::{AppHandle, Manager};
 
+use super::core::diff::word_hunks;
 use super::core::learner::{self, Application, Applied, Decider, LearnEvent, Observation};
 use super::core::rules::{Rule, Verdict};
 use super::core::text::{normalize_phrase, tokenize};
@@ -636,7 +637,7 @@ impl LearningService {
         let (Some(edited), Some(entry_id)) = (region, lock(session).history_id) else {
             return;
         };
-        let changed = edited != lock(session).pasted;
+        let changed = is_replacement_edit(&lock(session).pasted, &edited);
         if !events.is_empty() && changed {
             if let Some(history) = app.try_state::<Arc<HistoryManager>>() {
                 if let Err(e) = history.set_edited_text(entry_id, &edited) {
@@ -710,6 +711,13 @@ impl LearningService {
             }
         });
     }
+}
+
+/// Whether `edited` replaces at least one word of `pasted`. Words only added
+/// to the paste (typed next to it) are not a correction, and the history entry
+/// must not show them as one.
+fn is_replacement_edit(pasted: &str, edited: &str) -> bool {
+    !word_hunks(pasted, edited).is_empty()
 }
 
 /// `custom` words first, then `learned` words that are not already there
@@ -1285,6 +1293,33 @@ mod tests {
             .unwrap();
 
         assert_eq!(counts(&service, rule_id), (2, 2));
+    }
+
+    #[test]
+    fn only_a_replacement_is_kept_as_the_edited_text() {
+        assert!(is_replacement_edit(
+            "send it to Calvin",
+            "send it to Kelvin"
+        ));
+        assert!(is_replacement_edit("open eres now", "open Eres now"));
+        assert!(is_replacement_edit("get hub is up", "GitHub is up"));
+        // Nothing changed, or words were only added or only punctuation moved.
+        assert!(!is_replacement_edit(
+            "send it to Calvin",
+            "send it to Calvin"
+        ));
+        assert!(!is_replacement_edit(
+            "send it to Calvin",
+            "send it to Calvin now"
+        ));
+        assert!(!is_replacement_edit(
+            "send it to Calvin",
+            "so send it to Calvin"
+        ));
+        assert!(!is_replacement_edit(
+            "send it to Calvin",
+            "send it to Calvin."
+        ));
     }
 
     #[test]

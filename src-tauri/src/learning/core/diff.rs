@@ -55,6 +55,42 @@ pub fn word_hunks(old: &str, new: &str) -> Vec<Hunk> {
     hunks
 }
 
+/// `new` without the words typed before its first and after its last word that
+/// is also in `old`. Only pure insertions at either end go: a run of changed
+/// words that replaces any word of `old` stays whole. Text with nothing in
+/// common with `old`, or too large to align, comes back as it is.
+pub fn trim_insertions<'a>(old: &str, new: &'a str) -> &'a str {
+    let a = tokenize(old);
+    let b = tokenize(new);
+    let Some(ops) = align(&a, &b) else {
+        return new;
+    };
+    let Some(first_equal) = ops.iter().position(|op| matches!(op, Op::Equal(..))) else {
+        return new;
+    };
+    let last_equal = ops
+        .iter()
+        .rposition(|op| matches!(op, Op::Equal(..)))
+        .unwrap_or(first_equal);
+    let leading = &ops[..first_equal];
+    let trailing = &ops[last_equal + 1..];
+    let has_delete = |run: &[Op]| run.iter().any(|op| matches!(op, Op::Delete(_)));
+    let inserted = |run: &[Op]| run.iter().filter(|op| matches!(op, Op::Insert(_))).count();
+
+    let mut first = 0;
+    let mut last = b.len();
+    if !has_delete(leading) {
+        first += inserted(leading);
+    }
+    if !has_delete(trailing) {
+        last -= inserted(trailing);
+    }
+    if first >= last {
+        return new;
+    }
+    &new[b[first].start..b[last - 1].end]
+}
+
 /// Turns the pending run of changed tokens into a hunk, if it replaces something.
 fn flush(
     old: &str,
@@ -260,5 +296,36 @@ mod tests {
         // A capital at a sentence start that is not plain sentence case is a spelling.
         let h = word_hunks("it works. iphone is new", "it works. iPhone is new");
         assert_eq!((h[0].old.as_str(), h[0].new.as_str()), ("iphone", "iPhone"));
+    }
+
+    #[test]
+    fn trim_drops_words_typed_around_the_text() {
+        assert_eq!(
+            trim_insertions(
+                "send it to Calvin today",
+                "note send it to Kelvin today and more"
+            ),
+            "send it to Kelvin today"
+        );
+        assert_eq!(trim_insertions("a b c", "a b c d e"), "a b c");
+        assert_eq!(trim_insertions("a b c", "x y a b c"), "a b c");
+    }
+
+    #[test]
+    fn trim_keeps_a_replacement_at_either_end() {
+        assert_eq!(
+            trim_insertions("Calvin met us", "Kelvin met us"),
+            "Kelvin met us"
+        );
+        assert_eq!(
+            trim_insertions("we met Calvin", "we met Kelvin"),
+            "we met Kelvin"
+        );
+    }
+
+    #[test]
+    fn trim_leaves_text_with_nothing_in_common() {
+        assert_eq!(trim_insertions("a b", "x y z"), "x y z");
+        assert_eq!(trim_insertions("a b", ""), "");
     }
 }
