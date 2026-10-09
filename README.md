@@ -32,7 +32,7 @@ Design and decisions: [docs/learning/DESIGN.md](docs/learning/DESIGN.md).
 scripts/install-local.sh
 ```
 
-The script builds the app, moves the old Handy to the Trash, and installs the new one. It keeps your settings and history. Then follow the steps it prints to grant Accessibility again.
+The script builds the app and installs it. If the installed Handy is an official release, the script first saves it as a zip in `~/Handy-backups`, and it prints the command to restore it. Your settings, history and models stay. Then follow the steps it prints to grant Accessibility again. Use `--no-build` to install the last build without a rebuild.
 
 ## Why Handy?
 
