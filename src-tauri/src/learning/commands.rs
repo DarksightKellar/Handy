@@ -30,6 +30,16 @@ pub fn history_baseline(entry: &HistoryEntry) -> &str {
         .unwrap_or(&entry.transcription_text)
 }
 
+/// The text a history edit is learned against. The edit box starts from the
+/// entry's earlier edit, so the new edit is measured from that text. Measured
+/// from the paste, every save would count the earlier fixes a second time.
+pub fn history_learning_baseline(entry: &HistoryEntry) -> &str {
+    entry
+        .edited_text
+        .as_deref()
+        .unwrap_or_else(|| history_baseline(entry))
+}
+
 /// Checks the text of one side of a rule. Returns it trimmed.
 fn valid_side<'a>(text: &'a str, name: &str) -> Result<&'a str, String> {
     let text = text.trim();
@@ -121,6 +131,8 @@ pub async fn learning_from_history_edit(
         .ok_or_else(|| format!("History entry {entry_id} not found"))?;
 
     let baseline = history_baseline(&entry).to_string();
+    // What the edit box started from: the earlier edit, if there is one.
+    let learn_from = history_learning_baseline(&entry).to_string();
     // The same edit saved twice teaches nothing new.
     if entry.edited_text.as_deref() == Some(edited.as_str()) {
         return Ok(Vec::new());
@@ -142,7 +154,7 @@ pub async fn learning_from_history_edit(
         let sink = app.clone();
         let edited_for_learning = edited.clone();
         let events = tauri::async_runtime::spawn_blocking(move || {
-            service.record_history_edit(&sink, &baseline, &edited_for_learning)
+            service.record_history_edit(&sink, &learn_from, &edited_for_learning)
         })
         .await
         .map_err(|e| format!("Learning task failed: {e}"))?;
@@ -248,5 +260,69 @@ mod tests {
         assert!(valid_side("   ", "from").is_err());
         assert!(valid_side("a b c d", "to").is_ok());
         assert!(valid_side("a b c d e", "to").is_err());
+    }
+
+    struct NoSink;
+    impl crate::learning::notice::NoticeSink for NoSink {
+        fn notice(&self, _: crate::learning::notice::LearningNotice) {}
+    }
+
+    #[test]
+    fn a_history_edit_is_learned_against_the_earlier_edit() {
+        let mut e = entry("raw", None, Some("Calvin met heiress."));
+        assert_eq!(history_learning_baseline(&e), "Calvin met heiress.");
+        e.edited_text = Some("Kelvin met heiress.".into());
+        assert_eq!(history_learning_baseline(&e), "Kelvin met heiress.");
+        // The "back to the paste" check still compares with the paste.
+        assert_eq!(history_baseline(&e), "Calvin met heiress.");
+    }
+
+    #[test]
+    fn two_successive_history_edits_count_a_fix_once() {
+        use crate::learning::service::LearningService;
+        use crate::learning::store::RuleStore;
+        let service =
+            LearningService::new(RuleStore::open_in_memory().unwrap(), Box::new(|_| None));
+        let mut e = entry("raw", None, Some("Calvin met a ghost on Monday."));
+
+        // First save: Calvin becomes Kelvin.
+        let first = "Kelvin met a ghost on Monday.";
+        service.record_history_edit(&NoSink, history_learning_baseline(&e), first);
+        e.edited_text = Some(first.into());
+        // Second save starts from the first edit and fixes one more word.
+        let second = "Kelvin met a guest on Monday.";
+        service.record_history_edit(&NoSink, history_learning_baseline(&e), second);
+
+        let rules = service.store().all().unwrap();
+        let calvin = rules.iter().find(|r| r.from == "Calvin").unwrap();
+        assert_eq!(
+            (calvin.hits, calvin.misses),
+            (1, 0),
+            "the first fix is counted once"
+        );
+    }
+
+    #[test]
+    fn two_successive_history_edits_that_repeat_a_known_rule_count_it_once() {
+        use crate::learning::service::LearningService;
+        use crate::learning::store::RuleStore;
+        let service =
+            LearningService::new(RuleStore::open_in_memory().unwrap(), Box::new(|_| None));
+        // A rule that is already known: each edit that makes it is a hit.
+        service.record_history_edit(&NoSink, "send it to Calvin", "send it to Kelvin");
+        let mut e = entry("raw", None, Some("Calvin met heiress and Calvin left."));
+        let first = "Kelvin met heiress and Kelvin left.";
+        service.record_history_edit(&NoSink, history_learning_baseline(&e), first);
+        e.edited_text = Some(first.into());
+        service.record_history_edit(
+            &NoSink,
+            history_learning_baseline(&e),
+            "Kelvin met Eres and Kelvin left.",
+        );
+        let rules = service.store().all().unwrap();
+        let calvin = rules.iter().find(|r| r.from == "Calvin").unwrap();
+        // 1 at birth, 2 for the two Calvins fixed in the first edit, none for
+        // the second edit.
+        assert_eq!(calvin.hits, 3);
     }
 }

@@ -51,6 +51,8 @@ pub struct PasteSession {
     pub history_id: Option<i64>,
     /// Applications the user already settled with a swap.
     settled: HashSet<usize>,
+    /// Applications the watch already counted as a hit or a miss.
+    counted: HashSet<usize>,
 }
 
 /// How a swap changes what the rule has learned.
@@ -89,6 +91,7 @@ impl PasteSession {
             applications,
             history_id,
             settled: HashSet::new(),
+            counted: HashSet::new(),
         }
     }
 
@@ -109,6 +112,15 @@ impl PasteSession {
             .filter(|(i, _)| !self.settled.contains(i))
             .map(|(_, a)| a.clone())
             .collect()
+    }
+
+    /// Notes that the watch counted every application the user had not settled.
+    fn mark_counted(&mut self) {
+        for i in 0..self.applications.len() {
+            if !self.settled.contains(&i) {
+                self.counted.insert(i);
+            }
+        }
     }
 
     pub fn plan_swap(&self, index: usize) -> Result<SwapPlan, String> {
@@ -405,8 +417,11 @@ impl LearningService {
             return Vec::new();
         };
         let (baseline, applications) = {
-            let s = lock(session);
-            (s.pasted.clone(), s.live_applications())
+            let mut s = lock(session);
+            let live = (s.pasted.clone(), s.live_applications());
+            // From here on, a swap must not count these words a second time.
+            s.mark_counted();
+            live
         };
         self.record_edit(sink, &baseline, edited, &applications)
     }
@@ -446,18 +461,23 @@ impl LearningService {
         let plan = lock(&session).plan_swap(application_index)?;
         match write(&plan) {
             Ok(()) => {
-                let rule_id = {
+                let (rule_id, already_counted) = {
                     let mut s = lock(&session);
                     let id = s.applications[application_index].rule_id;
+                    let counted = s.counted.contains(&application_index);
                     s.complete_swap(application_index);
-                    id
+                    (id, counted)
                 };
-                let result = match plan.outcome {
-                    SwapOutcome::ToRule => self.store.hit(rule_id, now()),
-                    SwapOutcome::ToOriginal => self.store.miss(rule_id, now()),
-                };
-                if let Err(e) = result {
-                    warn!("Could not record the result of a swap: {e}");
+                // A watch that already ended counted this word from the text it
+                // saw; the swap changes the text, not the evidence.
+                if !already_counted {
+                    let result = match plan.outcome {
+                        SwapOutcome::ToRule => self.store.hit(rule_id, now()),
+                        SwapOutcome::ToOriginal => self.store.miss(rule_id, now()),
+                    };
+                    if let Err(e) = result {
+                        warn!("Could not record the result of a swap: {e}");
+                    }
                 }
                 Ok(())
             }
@@ -1192,6 +1212,79 @@ mod tests {
             .unwrap();
         assert_eq!((rule.hits, rule.misses), (1, 2));
         assert!(notices.all().is_empty());
+    }
+
+    fn counts(service: &LearningService, rule_id: i64) -> (u32, u32) {
+        let rule = service
+            .store()
+            .all()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == rule_id)
+            .unwrap();
+        (rule.hits, rule.misses)
+    }
+
+    #[test]
+    fn a_swap_after_the_watch_ended_does_not_count_the_word_again() {
+        // The original was pasted and the writer left it: the watch counts a miss.
+        let service = service();
+        let (rule_id, session) = ambiguous_session_with(&service, 2);
+        let id = lock(&session).id;
+        service.conclude_watch(
+            &Notices::default(),
+            &session,
+            Some("push the fix to heiress"),
+        );
+        assert_eq!(counts(&service, rule_id), (1, 3));
+
+        // The swap is still written to the text box, but the word is counted once.
+        let written = Mutex::new(0);
+        service
+            .run_swap(
+                &Notices::default(),
+                &|_| {
+                    *written.lock().unwrap() += 1;
+                    Ok(())
+                },
+                &|_| panic!("no clipboard needed"),
+                id,
+                0,
+            )
+            .unwrap();
+
+        assert_eq!(*written.lock().unwrap(), 1);
+        assert_eq!(lock(&session).pasted, "push the fix to Eres");
+        assert_eq!(counts(&service, rule_id), (1, 3));
+    }
+
+    #[test]
+    fn a_swap_back_after_the_watch_confirmed_the_word_is_not_a_second_count() {
+        let service = service();
+        let (rule_id, session) = ambiguous_session(&service);
+        let id = lock(&session).id;
+        service.conclude_watch(&Notices::default(), &session, Some("push the fix to Eres"));
+        assert_eq!(counts(&service, rule_id), (2, 1));
+
+        service
+            .run_swap(&Notices::default(), &|_| Ok(()), &|_| Ok(()), id, 0)
+            .unwrap();
+
+        assert_eq!(counts(&service, rule_id), (2, 1));
+    }
+
+    #[test]
+    fn a_watch_that_saw_nothing_leaves_a_later_swap_to_count() {
+        let service = service();
+        let (rule_id, session) = ambiguous_session_with(&service, 2);
+        let id = lock(&session).id;
+        service.conclude_watch(&Notices::default(), &session, None);
+
+        service
+            .run_swap(&Notices::default(), &|_| Ok(()), &|_| Ok(()), id, 0)
+            .unwrap();
+
+        assert_eq!(counts(&service, rule_id), (2, 2));
     }
 
     #[test]
