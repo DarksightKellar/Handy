@@ -80,6 +80,20 @@ const DEFAULT_AUDIO_DEVICE: AudioDevice = {
   is_default: true,
 };
 
+/**
+ * Turns a command's `{ status: "error" }` result into a thrown error, so
+ * `updateSetting` rolls the optimistic change back. The message is the
+ * backend's own text, which never holds a setting value.
+ */
+const throwOnError = async (
+  call: Promise<{ status: "ok" } | { status: "error"; error: string }>,
+): Promise<void> => {
+  const result = await call;
+  if (result.status === "error") {
+    throw new Error(result.error);
+  }
+};
+
 const settingUpdaters: {
   [K in keyof Settings]?: (value: Settings[K]) => Promise<unknown>;
 } = {
@@ -197,6 +211,15 @@ const settingUpdaters: {
     commands.changeTranscribeGpuDevice(value as string | null),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
+  learning_enabled: (value) =>
+    throwOnError(commands.changeLearningEnabledSetting(value as boolean)),
+  learning_watch_seconds: (value) =>
+    throwOnError(commands.changeLearningWatchSecondsSetting(value as number)),
+  // The key goes to this command and nowhere else; it is never logged.
+  jev_api_key: (value) =>
+    throwOnError(commands.changeJevApiKeySetting(value as string)),
+  jev_confidence_threshold: (value) =>
+    throwOnError(commands.changeJevConfidenceThresholdSetting(value as number)),
 };
 
 export const useSettingsStore = create<SettingsStore>()(

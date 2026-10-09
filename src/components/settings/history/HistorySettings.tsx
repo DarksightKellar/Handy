@@ -1,7 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { Check, Copy, FolderOpen, RotateCcw, Star, Trash2 } from "lucide-react";
+import {
+  Check,
+  Copy,
+  FolderOpen,
+  Pencil,
+  RotateCcw,
+  Star,
+  Trash2,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -14,7 +22,9 @@ import { useOsType } from "@/hooks/useOsType";
 import { formatDateTime } from "@/utils/dateFormat";
 import { AudioPlayer, AudioPlayerGroup } from "../../ui/AudioPlayer";
 import { Button } from "../../ui/Button";
+import { Textarea } from "../../ui/Textarea";
 import { copyToClipboard } from "./clipboard";
+import { displayedText } from "./entryText";
 
 const IconButton: React.FC<{
   onClick: () => void;
@@ -251,7 +261,7 @@ export const HistorySettings: React.FC = () => {
                 key={entry.id}
                 entry={entry}
                 onToggleSaved={() => toggleSaved(entry.id)}
-                onCopyText={() => copyToClipboard(entry.transcription_text)}
+                onCopyText={() => copyToClipboard(displayedText(entry))}
                 getAudioUrl={getAudioUrl}
                 deleteAudio={deleteAudioEntry}
                 retryTranscription={retryHistoryEntry}
@@ -307,6 +317,13 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   const { t, i18n } = useTranslation();
   const [showCopied, setShowCopied] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // The user's own fix if there is one, else what Handy pasted, else the
+  // transcript.
+  const shownText = displayedText(entry);
 
   const hasTranscription = entry.transcription_text.trim().length > 0;
 
@@ -351,6 +368,41 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
     }
   };
 
+  const startEditing = () => {
+    setDraft(shownText);
+    setEditing(true);
+  };
+
+  // Cancel throws the draft away; the next edit starts from the shown text.
+  const cancelEditing = () => {
+    setDraft(shownText);
+    setEditing(false);
+  };
+
+  const saveEdit = async () => {
+    setSaving(true);
+    try {
+      const result = await commands.learningFromHistoryEdit(entry.id, draft);
+      if (result.status !== "ok") {
+        throw new Error(String(result.error));
+      }
+      const count = result.data.length;
+      toast.success(
+        count > 0
+          ? t("settings.history.edit.learned", { count })
+          : t("settings.history.edit.saved"),
+      );
+      setEditing(false);
+    } catch (error) {
+      console.error("Failed to save the edit:", error);
+      toast.error(t("settings.history.edit.error"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const canSave = !saving && draft.trim() !== "" && draft !== shownText;
+
   const formattedDate = formatDateTime(String(entry.timestamp), i18n.language);
 
   return (
@@ -368,6 +420,13 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
             ) : (
               <Copy width={16} height={16} />
             )}
+          </IconButton>
+          <IconButton
+            onClick={startEditing}
+            disabled={retrying || editing || !hasTranscription}
+            title={t("settings.history.edit.button")}
+          >
+            <Pencil width={16} height={16} />
           </IconButton>
           <IconButton
             onClick={onToggleSaved}
@@ -410,34 +469,78 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
         </div>
       </div>
 
-      <p
-        className={`italic text-sm pb-2 ${
-          retrying
-            ? ""
-            : hasTranscription
-              ? "text-text/90 select-text cursor-text whitespace-pre-wrap break-words"
-              : "text-text/40"
-        }`}
-        style={
-          retrying
-            ? { animation: "transcribe-pulse 3s ease-in-out infinite" }
-            : undefined
-        }
-      >
-        {retrying && (
-          <style>{`
+      {editing ? (
+        <div className="flex flex-col gap-2 pb-2">
+          <Textarea
+            variant="compact"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                cancelEditing();
+              } else if (
+                event.key === "Enter" &&
+                (event.metaKey || event.ctrlKey) &&
+                canSave
+              ) {
+                event.preventDefault();
+                void saveEdit();
+              }
+            }}
+            aria-label={t("settings.history.edit.button")}
+            disabled={saving}
+            autoFocus
+            className="w-full"
+          />
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => void saveEdit()}
+              disabled={!canSave}
+            >
+              {t("settings.history.edit.save")}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={cancelEditing}
+              disabled={saving}
+            >
+              {t("settings.history.edit.cancel")}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p
+          className={`italic text-sm pb-2 ${
+            retrying
+              ? ""
+              : hasTranscription
+                ? "text-text/90 select-text cursor-text whitespace-pre-wrap break-words"
+                : "text-text/40"
+          }`}
+          style={
+            retrying
+              ? { animation: "transcribe-pulse 3s ease-in-out infinite" }
+              : undefined
+          }
+        >
+          {retrying && (
+            <style>{`
             @keyframes transcribe-pulse {
               0%, 100% { color: color-mix(in srgb, var(--color-text) 40%, transparent); }
               50% { color: color-mix(in srgb, var(--color-text) 90%, transparent); }
             }
           `}</style>
-        )}
-        {retrying
-          ? t("settings.history.transcribing")
-          : hasTranscription
-            ? entry.transcription_text
-            : t("settings.history.transcriptionFailed")}
-      </p>
+          )}
+          {retrying
+            ? t("settings.history.transcribing")
+            : hasTranscription
+              ? shownText
+              : t("settings.history.transcriptionFailed")}
+        </p>
+      )}
 
       <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
     </div>
