@@ -189,7 +189,10 @@ pub fn spawn_watch_after(
     )
 }
 
-/// Starts a watch on an already captured field.
+/// Starts a watch on an already captured field. The app captures its field on the
+/// watch thread instead (see [`spawn_watch_after`]); this form serves tests and
+/// callers that already hold a `Send` reader.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn spawn_watch(
     reader: Box<dyn FieldReader + Send>,
     pasted: String,

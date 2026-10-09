@@ -45,6 +45,8 @@ impl RuleStore {
         Self::from_connection(Connection::open(path)?)
     }
 
+    /// A store that lives in memory, for tests.
+    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         Self::from_connection(Connection::open_in_memory()?)
     }
