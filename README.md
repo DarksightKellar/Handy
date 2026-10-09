@@ -6,6 +6,34 @@
 
 Handy is a cross-platform desktop application that provides simple, privacy-focused speech transcription. Press a shortcut, speak, and have your words appear in any text field. This happens on your own computer without sending any information to the cloud.
 
+> **This is a fork.** It is [cjpais/Handy](https://github.com/cjpais/Handy) with a learning layer added. See [Learning layer](#learning-layer-this-fork) below.
+
+## Learning layer (this fork)
+
+Speech models sometimes hear a word wrong, for example "Calvin" for "Kelvin". In this fork, Handy learns from the fixes you make:
+
+1. Handy pastes the text.
+2. You fix the wrong word in the text box, as usual.
+3. Handy watches that text box for a short time (default 30 s), through macOS Accessibility. It learns the fix only when the old and new words sound alike, or differ only in spelling or capitals. A change of mind is not learned.
+4. A small notice says "Learned: Calvin → Kelvin", with an **Undo** button.
+5. The next time, Handy fixes the word before it pastes.
+
+When you sometimes mean the original word (for example "heiress" and the project name "Eres"), Handy pastes its best guess and shows the other option. Click **Swap**, or press the swap shortcut, to change it. That choice also teaches Handy. If you add a [Jev](https://docs.typesafe.ai) API key, Handy asks Jev to choose first. Only that one sentence is sent to Jev, as text. Audio never leaves your Mac.
+
+For apps that do not show their text to Accessibility, edit the transcription in **History**. Handy learns from that edit.
+
+The **Learned** page in settings lists every fix. You can edit, pause or delete each one. The layer works with every model. Whisper-family models also get the learned words as a prompt.
+
+Design and decisions: [docs/learning/DESIGN.md](docs/learning/DESIGN.md).
+
+### Install this fork on macOS
+
+```bash
+scripts/install-local.sh
+```
+
+The script builds the app, moves the old Handy to the Trash, and installs the new one. It keeps your settings and history. Then follow the steps it prints to grant Accessibility again.
+
 ## Why Handy?
 
 Handy was created to fill the gap for a truly open source, extensible speech-to-text tool. As stated on [handy.computer](https://handy.computer):
