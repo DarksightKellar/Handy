@@ -7,6 +7,7 @@
 
 pub mod commands;
 pub mod core;
+pub mod jev;
 pub mod notice;
 #[path = "watcher_other.rs"]
 mod platform;

@@ -18,6 +18,7 @@ use tauri::AppHandle;
 use super::core::learner::{self, Application, Applied, Decider, LearnEvent, Observation};
 use super::core::rules::{Rule, Verdict};
 use super::core::text::{normalize_phrase, tokenize};
+use super::jev::JevDecider;
 use super::notice::{LearningNotice, NoticeSink};
 use super::store::RuleStore;
 use crate::settings::AppSettings;
@@ -509,9 +510,9 @@ impl LearningService {
     }
 }
 
-/// The decider factory for the app: Jev, when a key is set.
-fn default_decider_factory() -> DeciderFactory {
-    Box::new(|_key| None)
+/// The decider factory for the app: Jev, for a non-empty API key.
+pub fn default_decider_factory() -> DeciderFactory {
+    Box::new(|key| JevDecider::new(key).map(|d| Arc::new(d) as SharedDecider))
 }
 
 /// Rules whose `to` appears in `text`, as if Handy had just applied them. This
@@ -783,6 +784,13 @@ mod tests {
 
         assert_eq!(applied.text, "push the fix to Eres");
         assert!(applied.applications[0].alternative.is_none());
+    }
+
+    #[test]
+    fn the_default_factory_builds_jev_only_for_a_key() {
+        let factory = default_decider_factory();
+        assert!(factory("jev-key").is_some());
+        assert!(factory("").is_none());
     }
 
     #[test]
