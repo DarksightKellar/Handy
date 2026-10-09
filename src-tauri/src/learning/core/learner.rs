@@ -1,5 +1,7 @@
 //! Applying rules to a transcript and learning from edits to a paste.
 
+use std::time::{Duration, Instant};
+
 use super::diff::word_hunks;
 use super::rules::{Rule, RuleKind, Verdict};
 use super::sound::{classify, EditClass};
@@ -10,6 +12,11 @@ pub trait Decider {
     /// `None` means no decision. Otherwise one probability per option.
     fn choose(&self, sentence_with_blank: &str, options: &[String]) -> Option<Vec<f64>>;
 }
+
+/// The most time all decider calls of one paste may use together. Dictation
+/// must not wait on the network: past this, the best guess is pasted and the
+/// other option is offered.
+pub const DECIDER_BUDGET: Duration = Duration::from_millis(1500);
 
 /// One rule applied to the output text.
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +77,18 @@ pub fn apply(
     decider: Option<&dyn Decider>,
     jev_threshold: f64,
 ) -> Applied {
+    apply_within(text, rules, decider, jev_threshold, DECIDER_BUDGET)
+}
+
+/// [`apply`] with an explicit time budget for all decider calls together.
+pub fn apply_within(
+    text: &str,
+    rules: &[Rule],
+    decider: Option<&dyn Decider>,
+    jev_threshold: f64,
+    budget: Duration,
+) -> Applied {
+    let mut gate = DeciderGate::new(decider, budget);
     let mut matchers: Vec<Matcher> = rules
         .iter()
         .filter(|r| !r.paused)
@@ -107,8 +126,8 @@ pub fn apply(
             Verdict::Keep => (original.to_string(), None),
             Verdict::Apply => (to, None),
             Verdict::Ambiguous { p_to } => {
-                let blank = format!("{}___{}", &text[..start], &text[end..]);
-                decide(p_to, &to, original, &blank, decider, jev_threshold)
+                let blank = sentence_with_blank(text, start, end);
+                decide(p_to, &to, original, &blank, &mut gate, jev_threshold)
             }
         };
 
@@ -166,6 +185,53 @@ fn cased(to: &str, at_sentence_start: bool) -> String {
     }
 }
 
+/// The decider, with the time one paste may spend on it. A decider that gives
+/// no answer (it failed or timed out) is not asked again in the same paste.
+struct DeciderGate<'a> {
+    decider: Option<&'a dyn Decider>,
+    deadline: Instant,
+}
+
+impl<'a> DeciderGate<'a> {
+    fn new(decider: Option<&'a dyn Decider>, budget: Duration) -> Self {
+        Self {
+            decider,
+            deadline: Instant::now() + budget,
+        }
+    }
+
+    fn choose(&mut self, blank: &str, options: &[String]) -> Option<Vec<f64>> {
+        let decider = self.decider?;
+        if Instant::now() >= self.deadline {
+            self.decider = None;
+            return None;
+        }
+        let answer = decider.choose(blank, options);
+        if answer.is_none() {
+            self.decider = None;
+        }
+        answer
+    }
+}
+
+/// The sentence that holds `text[start..end]`, with the match replaced by
+/// `___`. The sentence runs from the nearest `.`, `!`, `?` or line break before
+/// the match to the nearest one after it (that mark ends the sentence and
+/// stays). Only this much of the text goes to the decider.
+fn sentence_with_blank(text: &str, start: usize, end: usize) -> String {
+    // The stop marks are ASCII, so one byte each.
+    let is_stop = |c: char| matches!(c, '.' | '!' | '?' | '\n' | '\r');
+    let from = text[..start].rfind(is_stop).map_or(0, |i| i + 1);
+    let to = text[end..]
+        .find(is_stop)
+        .map_or(text.len(), |i| end + i + 1);
+    // A line break ends the sentence but is not part of it.
+    let after = text[end..to].trim_end_matches(['\n', '\r']);
+    format!("{}___{}", &text[from..start], after)
+        .trim()
+        .to_string()
+}
+
 /// Picks between `to` and `original` for an ambiguous rule. Returns the chosen
 /// text and, when nothing settled it, the other option.
 fn decide(
@@ -173,16 +239,14 @@ fn decide(
     to: &str,
     original: &str,
     blank: &str,
-    decider: Option<&dyn Decider>,
+    gate: &mut DeciderGate,
     jev_threshold: f64,
 ) -> (String, Option<String>) {
-    if let Some(d) = decider {
-        let options = [to.to_string(), original.to_string()];
-        if let Some(probs) = d.choose(blank, &options) {
-            for (option, p) in options.iter().zip(&probs) {
-                if *p >= jev_threshold {
-                    return (option.clone(), None);
-                }
+    let options = [to.to_string(), original.to_string()];
+    if let Some(probs) = gate.choose(blank, &options) {
+        for (option, p) in options.iter().zip(&probs) {
+            if *p >= jev_threshold {
+                return (option.clone(), None);
             }
         }
     }
@@ -548,5 +612,91 @@ mod tests {
             &[]
         )
         .is_empty());
+    }
+
+    /// Records every sentence it is asked about and answers with `answer`.
+    struct Recording {
+        asked: std::cell::RefCell<Vec<String>>,
+        answer: Option<Vec<f64>>,
+        delay: std::time::Duration,
+    }
+    impl Recording {
+        fn new(answer: Option<Vec<f64>>) -> Self {
+            Self::slow(answer, std::time::Duration::ZERO)
+        }
+        fn slow(answer: Option<Vec<f64>>, delay: std::time::Duration) -> Self {
+            Self {
+                asked: Default::default(),
+                answer,
+                delay,
+            }
+        }
+        fn asked(&self) -> Vec<String> {
+            self.asked.borrow().clone()
+        }
+    }
+    impl Decider for Recording {
+        fn choose(&self, sentence: &str, _: &[String]) -> Option<Vec<f64>> {
+            self.asked.borrow_mut().push(sentence.to_string());
+            std::thread::sleep(self.delay);
+            self.answer.clone()
+        }
+    }
+
+    #[test]
+    fn the_decider_gets_only_the_sentence_that_holds_the_match() {
+        let rules = [rule(1, "heiress", "Eres", 1, 1)];
+        let decider = Recording::new(Some(vec![0.5, 0.5]));
+        apply(
+            "We met at noon. Then we pushed the fix to heiress today! Nobody replied.",
+            &rules,
+            Some(&decider),
+            0.8,
+        );
+        assert_eq!(decider.asked(), ["Then we pushed the fix to ___ today!"]);
+    }
+
+    #[test]
+    fn a_line_break_ends_the_sentence_sent_to_the_decider() {
+        let rules = [rule(1, "heiress", "Eres", 1, 1)];
+        let decider = Recording::new(None);
+        apply(
+            "Dear team\nthe heiress is ready\nBest regards",
+            &rules,
+            Some(&decider),
+            0.8,
+        );
+        assert_eq!(decider.asked(), ["the ___ is ready"]);
+        let decider = Recording::new(None);
+        apply("heiress", &rules, Some(&decider), 0.8);
+        assert_eq!(decider.asked(), ["___"]);
+    }
+
+    #[test]
+    fn the_decider_gets_a_total_time_budget_for_one_paste() {
+        let rules = [rule(1, "heiress", "Eres", 1, 1)];
+        let decider = Recording::slow(Some(vec![0.5, 0.5]), std::time::Duration::from_millis(60));
+        let started = std::time::Instant::now();
+        let applied = apply_within(
+            "heiress one. heiress two. heiress three. heiress four. heiress five.",
+            &rules,
+            Some(&decider),
+            0.8,
+            std::time::Duration::from_millis(100),
+        );
+        // Two calls fit in the budget; the rest take the no-decider path.
+        assert_eq!(decider.asked().len(), 2);
+        assert!(started.elapsed() < std::time::Duration::from_millis(400));
+        assert_eq!(applied.applications.len(), 5);
+        assert!(applied.applications.iter().all(|a| a.alternative.is_some()));
+    }
+
+    #[test]
+    fn a_decider_that_fails_once_is_not_asked_again() {
+        let rules = [rule(1, "heiress", "Eres", 1, 1)];
+        let decider = Recording::new(None);
+        let applied = apply("heiress. heiress. heiress.", &rules, Some(&decider), 0.8);
+        assert_eq!(decider.asked().len(), 1);
+        assert_eq!(applied.applications.len(), 3);
     }
 }
