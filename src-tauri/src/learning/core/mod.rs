@@ -2,5 +2,7 @@
 //! every test here runs with plain values and fakes.
 
 pub mod diff;
+pub mod learner;
+pub mod rules;
 pub mod sound;
 pub mod text;
