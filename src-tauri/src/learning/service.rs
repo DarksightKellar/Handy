@@ -10,10 +10,11 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use anyhow::Result;
 use log::{debug, warn};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use super::core::learner::{self, Application, Applied, Decider, LearnEvent, Observation};
 use super::core::rules::{Rule, Verdict};
@@ -21,7 +22,9 @@ use super::core::text::{normalize_phrase, tokenize};
 use super::jev::JevDecider;
 use super::notice::{LearningNotice, NoticeSink};
 use super::store::RuleStore;
-use crate::settings::AppSettings;
+use super::watch::{spawn_watch_after, WatchHandle, WatchTiming};
+use crate::managers::history::HistoryManager;
+use crate::settings::{get_settings, AppSettings};
 
 /// Builds a decider for an API key. `None` means there is no decider.
 pub type DeciderFactory = Box<dyn Fn(&str) -> Option<SharedDecider> + Send + Sync>;
@@ -172,6 +175,8 @@ pub struct LearningService {
     decider_cache: Mutex<Option<(String, Option<SharedDecider>)>>,
     next_session: AtomicU64,
     last: Mutex<Option<Arc<Mutex<PasteSession>>>>,
+    /// The watch of the last paste, while it runs.
+    watch: Mutex<Option<WatchHandle>>,
     /// Bumped each time the swap shortcut is requested or released, so a
     /// timer from an older notice does not release a newer one.
     swap_generation: AtomicU64,
@@ -189,6 +194,7 @@ impl LearningService {
             decider_cache: Mutex::new(None),
             next_session: AtomicU64::new(1),
             last: Mutex::new(None),
+            watch: Mutex::new(None),
             swap_generation: AtomicU64::new(0),
         }
     }
@@ -559,18 +565,65 @@ fn guess_applications(text: &str, rules: &[Rule]) -> Vec<Application> {
 
 impl LearningService {
     /// Call right after a successful paste. It returns at once: the caller is
-    /// the main thread, and everything slow runs on a worker thread.
+    /// the main thread, and everything slow runs on worker threads.
     pub fn after_paste(self: &Arc<Self>, app: &AppHandle, session: PasteSession) {
+        let pasted = session.pasted.clone();
         let handle = self.begin_session(session);
         let snapshot = lock(&handle).clone();
+
         let service = Arc::clone(self);
-        let app = app.clone();
+        let announce_app = app.clone();
         std::thread::spawn(move || {
-            service.announce_paste(&app, &snapshot);
+            service.announce_paste(&announce_app, &snapshot);
             if snapshot.next_swap().is_some() {
-                service.show_swap_shortcut(&app);
+                service.show_swap_shortcut(&announce_app);
             }
         });
+
+        self.start_watch(app, handle, pasted);
+    }
+
+    /// Watches the text box that received the paste. The watch of the paste
+    /// before this one ends first and finishes learning before the new one
+    /// reads anything, so the two never mix their texts.
+    fn start_watch(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        session: Arc<Mutex<PasteSession>>,
+        pasted: String,
+    ) {
+        let seconds = get_settings(app).learning_watch_seconds;
+        let timing = WatchTiming::new(Duration::from_secs(u64::from(seconds)));
+
+        let previous = lock(&self.watch).take();
+        let service = Arc::clone(self);
+        let app = app.clone();
+        let handle = spawn_watch_after(
+            previous,
+            super::platform::focused_field,
+            pasted,
+            timing,
+            crate::secure_input::is_enabled_now,
+            move |region| service.finish_watch(&app, &session, region),
+        );
+        *lock(&self.watch) = Some(handle);
+    }
+
+    /// The end of a watch: learns from what the box held, and keeps the user's
+    /// corrected text on the history entry.
+    fn finish_watch(&self, app: &AppHandle, session: &Mutex<PasteSession>, region: Option<String>) {
+        let events = self.conclude_watch(app, session, region.as_deref());
+        let (Some(edited), Some(entry_id)) = (region, lock(session).history_id) else {
+            return;
+        };
+        let changed = edited != lock(session).pasted;
+        if !events.is_empty() && changed {
+            if let Some(history) = app.try_state::<Arc<HistoryManager>>() {
+                if let Err(e) = history.set_edited_text(entry_id, &edited) {
+                    warn!("Could not store the edited text on the history entry: {e}");
+                }
+            }
+        }
     }
 
     /// Registers the swap shortcut for as long as a swap notice is visible.
