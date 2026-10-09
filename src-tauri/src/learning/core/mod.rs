@@ -3,6 +3,7 @@
 
 pub mod diff;
 pub mod learner;
+pub mod region;
 pub mod rules;
 pub mod sound;
 pub mod text;
