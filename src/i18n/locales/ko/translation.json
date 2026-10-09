@@ -16,7 +16,8 @@
     "postProcessing": "후처리",
     "history": "히스토리",
     "debug": "디버그",
-    "about": "정보"
+    "about": "정보",
+    "learned": "Learned"
   },
   "onboarding": {
     "subtitle": "시작하려면 음성 인식 모델을 선택하세요",
@@ -179,6 +180,10 @@
           "transcribe_with_post_process": {
             "name": "후처리 단축키",
             "description": "선택 사항: 항상 AI 후처리를 적용하는 전용 단축키입니다."
+          },
+          "learning_swap": {
+            "name": "Swap Learned Word Shortcut",
+            "description": "The keyboard shortcut that swaps the last pasted word for the other option while a swap notice shows."
           }
         },
         "errors": {
@@ -477,7 +482,16 @@
       "retranscribe": "다시 전사",
       "retranscribeError": "다시 전사에 실패했습니다. 다시 시도해주세요.",
       "transcribing": "전사 중...",
-      "transcriptionFailed": "전사에 실패했습니다. 재시도 아이콘을 사용하여 다시 전사할 수 있습니다."
+      "transcriptionFailed": "전사에 실패했습니다. 재시도 아이콘을 사용하여 다시 전사할 수 있습니다.",
+      "edit": {
+        "button": "Edit text",
+        "save": "Save",
+        "cancel": "Cancel",
+        "saved": "Edit saved.",
+        "learned_one": "Learned {{count}} fix",
+        "learned_other": "Learned {{count}} fixes",
+        "error": "Failed to save the edit. Please try again."
+      }
     },
     "debug": {
       "title": "디버그",
@@ -645,6 +659,57 @@
         "label": "새 소식 표시",
         "description": "Handy 업데이트 후 릴리스 노트를 표시합니다"
       }
+    },
+    "learned": {
+      "title": "Learning",
+      "enabled": {
+        "title": "Learn from my corrections",
+        "description": "After Handy pastes, it watches the text box for a short time. When you fix a word it heard wrong, Handy keeps the fix and uses it from then on."
+      },
+      "watchSeconds": {
+        "title": "Watch time",
+        "description": "How long Handy watches the text box for a fix after a paste.",
+        "unit": "seconds"
+      },
+      "jev": {
+        "title": "Jev (optional)",
+        "privacy": "Only the one sentence is sent to Jev, as text. Audio never leaves your Mac.",
+        "apiKey": {
+          "title": "Jev API key",
+          "description": "Lets Jev choose between two options when a word is unclear. Leave empty to turn Jev off.",
+          "placeholder": "Paste your key",
+          "show": "Show key",
+          "hide": "Hide key"
+        },
+        "threshold": {
+          "title": "Jev confidence",
+          "description": "Jev must be at least this sure before Handy uses its choice without asking you."
+        }
+      },
+      "rules": {
+        "title": "Learned fixes",
+        "description": "Handy applies these to every new transcript. Hover a fix to see the sentence it came from.",
+        "loading": "Loading learned fixes...",
+        "loadError": "Could not load the learned fixes.",
+        "empty": "Nothing learned yet. Fix a wrong word in the text box right after Handy pastes it, or edit a transcript in History, and Handy keeps the fix here.",
+        "from": "Heard as",
+        "to": "Replace with",
+        "stats": "Hits {{hits}} · Misses {{misses}} · Applied {{applied}}",
+        "kind": {
+          "word": "Word",
+          "phrase": "Phrase",
+          "spelling": "Spelling"
+        },
+        "active": "Apply this fix",
+        "edit": "Edit fix",
+        "delete": "Delete fix",
+        "save": "Save",
+        "cancel": "Cancel",
+        "updateError": "Could not save the change.",
+        "deleteError": "Could not delete the fix.",
+        "deleteTitle": "Delete this fix?",
+        "deleteDescription": "“{{from}}” → “{{to}}” will no longer be applied."
+      }
     }
   },
   "footer": {
@@ -724,5 +789,17 @@
     "learnMore": "해결 방법",
     "recorderBlocked": "지금은 단축키를 등록할 수 없습니다. macOS Secure Input이 키 이벤트를 차단하고 있습니다. Secure Input 경고를 먼저 해결하세요.",
     "dismiss": "닫기"
+  },
+  "notice": {
+    "learned": "Learned: {{from}} → {{to}}",
+    "undo": "Undo",
+    "undone": "Undone",
+    "undoFailed": "Could not undo.",
+    "pasted": "Pasted “{{chosen}}”.",
+    "swapTo": "Swap to “{{alternative}}”",
+    "swapHint": "or press {{shortcut}}",
+    "swapped": "Swapped",
+    "swapUnavailable": "Could not swap.",
+    "swapFailed": "Could not swap. “{{alternative}}” is on the clipboard."
   }
 }

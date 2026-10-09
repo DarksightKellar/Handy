@@ -16,7 +16,8 @@
     "postProcessing": "Následné zpracování",
     "history": "Historie",
     "debug": "Ladění",
-    "about": "O aplikaci"
+    "about": "O aplikaci",
+    "learned": "Learned"
   },
   "onboarding": {
     "subtitle": "Pro začátek vyberte model pro přepis",
@@ -199,6 +200,10 @@
           "transcribe_with_post_process": {
             "name": "Klávesa pro následné zpracování",
             "description": "Volitelné: Vyhrazená klávesová zkratka, která vždy použije AI následné zpracování na váš přepis."
+          },
+          "learning_swap": {
+            "name": "Swap Learned Word Shortcut",
+            "description": "The keyboard shortcut that swaps the last pasted word for the other option while a swap notice shows."
           }
         },
         "errors": {
@@ -477,7 +482,16 @@
       "retranscribe": "Přepsat znovu",
       "retranscribeError": "Opětovný přepis se nezdařil. Zkuste to prosím znovu.",
       "transcribing": "Přepisuji...",
-      "transcriptionFailed": "Přepis selhal. Můžete zkusit přepis znovu pomocí ikony opakování."
+      "transcriptionFailed": "Přepis selhal. Můžete zkusit přepis znovu pomocí ikony opakování.",
+      "edit": {
+        "button": "Edit text",
+        "save": "Save",
+        "cancel": "Cancel",
+        "saved": "Edit saved.",
+        "learned_one": "Learned {{count}} fix",
+        "learned_other": "Learned {{count}} fixes",
+        "error": "Failed to save the edit. Please try again."
+      }
     },
     "debug": {
       "title": "Ladění",
@@ -645,6 +659,57 @@
         "label": "Zobrazovat novinky",
         "description": "Zobrazovat poznámky k vydání po aktualizacích Handy"
       }
+    },
+    "learned": {
+      "title": "Learning",
+      "enabled": {
+        "title": "Learn from my corrections",
+        "description": "After Handy pastes, it watches the text box for a short time. When you fix a word it heard wrong, Handy keeps the fix and uses it from then on."
+      },
+      "watchSeconds": {
+        "title": "Watch time",
+        "description": "How long Handy watches the text box for a fix after a paste.",
+        "unit": "seconds"
+      },
+      "jev": {
+        "title": "Jev (optional)",
+        "privacy": "Only the one sentence is sent to Jev, as text. Audio never leaves your Mac.",
+        "apiKey": {
+          "title": "Jev API key",
+          "description": "Lets Jev choose between two options when a word is unclear. Leave empty to turn Jev off.",
+          "placeholder": "Paste your key",
+          "show": "Show key",
+          "hide": "Hide key"
+        },
+        "threshold": {
+          "title": "Jev confidence",
+          "description": "Jev must be at least this sure before Handy uses its choice without asking you."
+        }
+      },
+      "rules": {
+        "title": "Learned fixes",
+        "description": "Handy applies these to every new transcript. Hover a fix to see the sentence it came from.",
+        "loading": "Loading learned fixes...",
+        "loadError": "Could not load the learned fixes.",
+        "empty": "Nothing learned yet. Fix a wrong word in the text box right after Handy pastes it, or edit a transcript in History, and Handy keeps the fix here.",
+        "from": "Heard as",
+        "to": "Replace with",
+        "stats": "Hits {{hits}} · Misses {{misses}} · Applied {{applied}}",
+        "kind": {
+          "word": "Word",
+          "phrase": "Phrase",
+          "spelling": "Spelling"
+        },
+        "active": "Apply this fix",
+        "edit": "Edit fix",
+        "delete": "Delete fix",
+        "save": "Save",
+        "cancel": "Cancel",
+        "updateError": "Could not save the change.",
+        "deleteError": "Could not delete the fix.",
+        "deleteTitle": "Delete this fix?",
+        "deleteDescription": "“{{from}}” → “{{to}}” will no longer be applied."
+      }
     }
   },
   "footer": {
@@ -724,5 +789,17 @@
     "learnMore": "Jak to vyřešit",
     "recorderBlocked": "Zkratky teď nelze nahrát — Secure Input v macOS blokuje události kláves. Nejprve vyřešte upozornění na Secure Input.",
     "dismiss": "Zavřít"
+  },
+  "notice": {
+    "learned": "Learned: {{from}} → {{to}}",
+    "undo": "Undo",
+    "undone": "Undone",
+    "undoFailed": "Could not undo.",
+    "pasted": "Pasted “{{chosen}}”.",
+    "swapTo": "Swap to “{{alternative}}”",
+    "swapHint": "or press {{shortcut}}",
+    "swapped": "Swapped",
+    "swapUnavailable": "Could not swap.",
+    "swapFailed": "Could not swap. “{{alternative}}” is on the clipboard."
   }
 }

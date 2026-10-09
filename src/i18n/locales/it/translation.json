@@ -16,7 +16,8 @@
     "postProcessing": "Post-Elaborazione",
     "history": "Cronologia",
     "debug": "Debug",
-    "about": "Informazioni"
+    "about": "Informazioni",
+    "learned": "Learned"
   },
   "onboarding": {
     "subtitle": "Per cominciare, scegli un modello di riconoscimento vocale",
@@ -199,6 +200,10 @@
           "transcribe_with_post_process": {
             "name": "Tasto di post-elaborazione",
             "description": "Facoltativo: Un tasto di scelta rapida dedicato che applica sempre la post-elaborazione IA alla trascrizione."
+          },
+          "learning_swap": {
+            "name": "Swap Learned Word Shortcut",
+            "description": "The keyboard shortcut that swaps the last pasted word for the other option while a swap notice shows."
           }
         },
         "errors": {
@@ -477,7 +482,16 @@
       "retranscribe": "Ri-trascrivere",
       "retranscribeError": "Impossibile ri-trascrivere. Riprova.",
       "transcribing": "Trascrizione in corso...",
-      "transcriptionFailed": "Trascrizione fallita. Puoi ri-trascrivere usando l'icona di ripetizione."
+      "transcriptionFailed": "Trascrizione fallita. Puoi ri-trascrivere usando l'icona di ripetizione.",
+      "edit": {
+        "button": "Edit text",
+        "save": "Save",
+        "cancel": "Cancel",
+        "saved": "Edit saved.",
+        "learned_one": "Learned {{count}} fix",
+        "learned_other": "Learned {{count}} fixes",
+        "error": "Failed to save the edit. Please try again."
+      }
     },
     "debug": {
       "title": "Debug",
@@ -645,6 +659,57 @@
         "label": "Mostra novità",
         "description": "Mostra le note di rilascio dopo gli aggiornamenti di Handy"
       }
+    },
+    "learned": {
+      "title": "Learning",
+      "enabled": {
+        "title": "Learn from my corrections",
+        "description": "After Handy pastes, it watches the text box for a short time. When you fix a word it heard wrong, Handy keeps the fix and uses it from then on."
+      },
+      "watchSeconds": {
+        "title": "Watch time",
+        "description": "How long Handy watches the text box for a fix after a paste.",
+        "unit": "seconds"
+      },
+      "jev": {
+        "title": "Jev (optional)",
+        "privacy": "Only the one sentence is sent to Jev, as text. Audio never leaves your Mac.",
+        "apiKey": {
+          "title": "Jev API key",
+          "description": "Lets Jev choose between two options when a word is unclear. Leave empty to turn Jev off.",
+          "placeholder": "Paste your key",
+          "show": "Show key",
+          "hide": "Hide key"
+        },
+        "threshold": {
+          "title": "Jev confidence",
+          "description": "Jev must be at least this sure before Handy uses its choice without asking you."
+        }
+      },
+      "rules": {
+        "title": "Learned fixes",
+        "description": "Handy applies these to every new transcript. Hover a fix to see the sentence it came from.",
+        "loading": "Loading learned fixes...",
+        "loadError": "Could not load the learned fixes.",
+        "empty": "Nothing learned yet. Fix a wrong word in the text box right after Handy pastes it, or edit a transcript in History, and Handy keeps the fix here.",
+        "from": "Heard as",
+        "to": "Replace with",
+        "stats": "Hits {{hits}} · Misses {{misses}} · Applied {{applied}}",
+        "kind": {
+          "word": "Word",
+          "phrase": "Phrase",
+          "spelling": "Spelling"
+        },
+        "active": "Apply this fix",
+        "edit": "Edit fix",
+        "delete": "Delete fix",
+        "save": "Save",
+        "cancel": "Cancel",
+        "updateError": "Could not save the change.",
+        "deleteError": "Could not delete the fix.",
+        "deleteTitle": "Delete this fix?",
+        "deleteDescription": "“{{from}}” → “{{to}}” will no longer be applied."
+      }
     }
   },
   "footer": {
@@ -724,5 +789,17 @@
     "learnMore": "Come risolvere",
     "recorderBlocked": "Non è possibile registrare scorciatoie in questo momento: Secure Input di macOS sta bloccando gli eventi dei tasti. Risolvi prima l'avviso di Secure Input.",
     "dismiss": "Ignora"
+  },
+  "notice": {
+    "learned": "Learned: {{from}} → {{to}}",
+    "undo": "Undo",
+    "undone": "Undone",
+    "undoFailed": "Could not undo.",
+    "pasted": "Pasted “{{chosen}}”.",
+    "swapTo": "Swap to “{{alternative}}”",
+    "swapHint": "or press {{shortcut}}",
+    "swapped": "Swapped",
+    "swapUnavailable": "Could not swap.",
+    "swapFailed": "Could not swap. “{{alternative}}” is on the clipboard."
   }
 }

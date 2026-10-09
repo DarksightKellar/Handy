@@ -16,7 +16,8 @@
     "postProcessing": "पोस्ट प्रोसेस",
     "history": "इतिहास",
     "debug": "डिबग",
-    "about": "के बारे में"
+    "about": "के बारे में",
+    "learned": "Learned"
   },
   "onboarding": {
     "subtitle": "शुरू करने के लिए, एक ट्रांसक्रिप्शन मॉडल चुनें",
@@ -179,6 +180,10 @@
           "transcribe_with_post_process": {
             "name": "पोस्ट-प्रोसेसिंग हॉटकी",
             "description": "वैकल्पिक: एक अलग हॉटकी जो आपके ट्रांसक्रिप्शन पर हमेशा AI पोस्ट-प्रोसेसिंग लागू करती है."
+          },
+          "learning_swap": {
+            "name": "Swap Learned Word Shortcut",
+            "description": "The keyboard shortcut that swaps the last pasted word for the other option while a swap notice shows."
           }
         },
         "errors": {
@@ -477,7 +482,16 @@
       "retranscribe": "फिर से ट्रांसक्राइब करें",
       "retranscribeError": "फिर से ट्रांसक्राइब नहीं किया जा सका. कृपया फिर से कोशिश करें.",
       "transcribing": "ट्रांसक्राइब हो रहा है...",
-      "transcriptionFailed": "ट्रांसक्रिप्शन नहीं हो सका. आप रीट्राई आइकन से फिर से ट्रांसक्राइब कर सकते हैं."
+      "transcriptionFailed": "ट्रांसक्रिप्शन नहीं हो सका. आप रीट्राई आइकन से फिर से ट्रांसक्राइब कर सकते हैं.",
+      "edit": {
+        "button": "Edit text",
+        "save": "Save",
+        "cancel": "Cancel",
+        "saved": "Edit saved.",
+        "learned_one": "Learned {{count}} fix",
+        "learned_other": "Learned {{count}} fixes",
+        "error": "Failed to save the edit. Please try again."
+      }
     },
     "debug": {
       "title": "डिबग",
@@ -645,6 +659,57 @@
           "details": "Handy का लोकल स्पीच-टू-टेक्स्ट transcribe.cpp और ggml पर आधारित है. Georgi Gerganov और योगदान देने वालों के शानदार काम के लिए धन्यवाद."
         }
       }
+    },
+    "learned": {
+      "title": "Learning",
+      "enabled": {
+        "title": "Learn from my corrections",
+        "description": "After Handy pastes, it watches the text box for a short time. When you fix a word it heard wrong, Handy keeps the fix and uses it from then on."
+      },
+      "watchSeconds": {
+        "title": "Watch time",
+        "description": "How long Handy watches the text box for a fix after a paste.",
+        "unit": "seconds"
+      },
+      "jev": {
+        "title": "Jev (optional)",
+        "privacy": "Only the one sentence is sent to Jev, as text. Audio never leaves your Mac.",
+        "apiKey": {
+          "title": "Jev API key",
+          "description": "Lets Jev choose between two options when a word is unclear. Leave empty to turn Jev off.",
+          "placeholder": "Paste your key",
+          "show": "Show key",
+          "hide": "Hide key"
+        },
+        "threshold": {
+          "title": "Jev confidence",
+          "description": "Jev must be at least this sure before Handy uses its choice without asking you."
+        }
+      },
+      "rules": {
+        "title": "Learned fixes",
+        "description": "Handy applies these to every new transcript. Hover a fix to see the sentence it came from.",
+        "loading": "Loading learned fixes...",
+        "loadError": "Could not load the learned fixes.",
+        "empty": "Nothing learned yet. Fix a wrong word in the text box right after Handy pastes it, or edit a transcript in History, and Handy keeps the fix here.",
+        "from": "Heard as",
+        "to": "Replace with",
+        "stats": "Hits {{hits}} · Misses {{misses}} · Applied {{applied}}",
+        "kind": {
+          "word": "Word",
+          "phrase": "Phrase",
+          "spelling": "Spelling"
+        },
+        "active": "Apply this fix",
+        "edit": "Edit fix",
+        "delete": "Delete fix",
+        "save": "Save",
+        "cancel": "Cancel",
+        "updateError": "Could not save the change.",
+        "deleteError": "Could not delete the fix.",
+        "deleteTitle": "Delete this fix?",
+        "deleteDescription": "“{{from}}” → “{{to}}” will no longer be applied."
+      }
     }
   },
   "footer": {
@@ -724,5 +789,17 @@
     "learnMore": "इसे कैसे ठीक करें",
     "recorderBlocked": "अभी शॉर्टकट रिकॉर्ड नहीं किए जा सकते — macOS Secure Input कुंजी इवेंट ब्लॉक कर रहा है. पहले Secure Input चेतावनी हल करें.",
     "dismiss": "खारिज करें"
+  },
+  "notice": {
+    "learned": "Learned: {{from}} → {{to}}",
+    "undo": "Undo",
+    "undone": "Undone",
+    "undoFailed": "Could not undo.",
+    "pasted": "Pasted “{{chosen}}”.",
+    "swapTo": "Swap to “{{alternative}}”",
+    "swapHint": "or press {{shortcut}}",
+    "swapped": "Swapped",
+    "swapUnavailable": "Could not swap.",
+    "swapFailed": "Could not swap. “{{alternative}}” is on the clipboard."
   }
 }
