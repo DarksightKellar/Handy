@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::Result;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use tauri::{AppHandle, Manager};
 
 use super::core::diff::word_hunks;
@@ -325,6 +325,7 @@ impl LearningService {
     ) -> Vec<LearnEvent> {
         match self.store.all() {
             Ok(rules) => {
+                log_edit_summary(pasted, edited);
                 let observations = learner::observe(pasted, edited, applications, &rules);
                 self.record_observations(sink, observations)
             }
@@ -620,6 +621,11 @@ impl LearningService {
         pasted: String,
     ) {
         let seconds = get_settings(app).learning_watch_seconds;
+        info!(
+            "Watch started in {} for {} s",
+            super::platform::front_app_name(),
+            seconds
+        );
         let timing = WatchTiming::new(Duration::from_secs(u64::from(seconds)));
 
         let previous = lock(&self.watch).take();
@@ -742,6 +748,33 @@ pub fn merge_prompt_words(custom: &[String], learned: Vec<String>) -> Vec<String
         }
     }
     words
+}
+
+/// Logs what the gate sees in one edit: the number of changed spans and how
+/// each one was classed. Counts only, never the text.
+fn log_edit_summary(pasted: &str, edited: &str) {
+    use super::core::diff::word_hunks;
+    use super::core::sound::{classify, EditClass};
+    let hunks = word_hunks(pasted, edited);
+    if hunks.is_empty() {
+        info!("Edit check: the text was not changed in a way Handy learns from");
+        return;
+    }
+    let (mut spelling, mut sound, mut refused) = (0, 0, 0);
+    for hunk in &hunks {
+        match classify(&hunk.old, &hunk.new) {
+            EditClass::Spelling => spelling += 1,
+            EditClass::SoundAlike => sound += 1,
+            EditClass::ChangeOfMind => refused += 1,
+        }
+    }
+    info!(
+        "Edit check: {} changed span(s): {} spelling, {} sound-alike, {} refused as a change of meaning",
+        hunks.len(),
+        spelling,
+        sound,
+        refused
+    );
 }
 
 #[cfg(test)]

@@ -164,7 +164,7 @@ objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 objc2-service-management = "0.3.2"
 # Learning layer: read and write the focused text box through Accessibility.
-objc2-application-services = { version = "0.3", default-features = false, features = ["std", "HIServices", "AXError", "AXUIElement", "AXValue"] }
+objc2-application-services = { version = "0.3", default-features = false, features = ["std", "libc", "HIServices", "AXError", "AXUIElement", "AXValue"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase", "CFString", "CFNumber"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

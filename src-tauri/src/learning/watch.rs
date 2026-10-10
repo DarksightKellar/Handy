@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use log::debug;
+use log::{debug, info};
 
 use super::core::region::{Watch, WatchStep};
 
@@ -18,6 +18,65 @@ use super::core::region::{Watch, WatchStep};
 pub const SETTLE: Duration = Duration::from_millis(250);
 /// Time between readings.
 pub const POLL: Duration = Duration::from_millis(500);
+
+/// Why no text box can be watched. Logged; it never holds user text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoField {
+    NotTrusted,
+    NoFocusedElement,
+    SecretField,
+    NoReadableText,
+    /// Only the watcher for platforms without Accessibility support uses it.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    Unsupported,
+}
+
+impl NoField {
+    pub fn reason(self) -> &'static str {
+        match self {
+            NoField::NotTrusted => "Handy does not have the Accessibility permission",
+            NoField::NoFocusedElement => "no element has focus, or the app does not expose it",
+            NoField::SecretField => "the focused field is a secret field",
+            NoField::NoReadableText => "the focused element has no readable text",
+            NoField::Unsupported => "this platform has no text-box watch",
+        }
+    }
+}
+
+/// How a watch ended. Each case is one reason for a log line; only `Region`
+/// carries text, and `reason` never prints it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WatchEnd {
+    /// The last good reading of the pasted text (edited, or as pasted).
+    Region(String),
+    NoField(NoField),
+    SecureInput,
+    Stopped,
+    BaselineUnreadable,
+    PasteNotInField,
+    NoGoodReading,
+}
+
+impl WatchEnd {
+    pub fn reason(&self) -> &'static str {
+        match self {
+            WatchEnd::Region(_) => "read the pasted text",
+            WatchEnd::NoField(why) => why.reason(),
+            WatchEnd::SecureInput => "secure input or a secret field",
+            WatchEnd::Stopped => "stopped before the first reading",
+            WatchEnd::BaselineUnreadable => "the box could not be read after the paste",
+            WatchEnd::PasteNotInField => "the pasted text is not in the focused box",
+            WatchEnd::NoGoodReading => "no reading held the pasted text",
+        }
+    }
+
+    pub fn into_region(self) -> Option<String> {
+        match self {
+            WatchEnd::Region(region) => Some(region),
+            _ => None,
+        }
+    }
+}
 
 /// A text box that can be read.
 pub trait FieldReader {
@@ -69,6 +128,7 @@ fn sleep_unless_stopped(total: Duration, stop: &AtomicBool) {
 ///
 /// Setting `stop` ends the watch early with whatever was last seen; no new
 /// reading is taken after it is set.
+#[cfg(test)]
 pub fn run_watch(
     reader: &dyn FieldReader,
     pasted: &str,
@@ -76,12 +136,30 @@ pub fn run_watch(
     secure_now: &dyn Fn() -> bool,
     stop: &AtomicBool,
 ) -> Option<String> {
+    run_watch_end(reader, pasted, timing, secure_now, stop).into_region()
+}
+
+/// [`run_watch`], with the reason the watch ended.
+pub fn run_watch_end(
+    reader: &dyn FieldReader,
+    pasted: &str,
+    timing: WatchTiming,
+    secure_now: &dyn Fn() -> bool,
+    stop: &AtomicBool,
+) -> WatchEnd {
     sleep_unless_stopped(timing.settle, stop);
-    if stop.load(Ordering::SeqCst) || secure_now() || reader.is_secure() {
-        return None;
+    if stop.load(Ordering::SeqCst) {
+        return WatchEnd::Stopped;
     }
-    let baseline = reader.read()?;
-    let mut watch = Watch::start(&baseline, pasted)?;
+    if secure_now() || reader.is_secure() {
+        return WatchEnd::SecureInput;
+    }
+    let Some(baseline) = reader.read() else {
+        return WatchEnd::BaselineUnreadable;
+    };
+    let Some(mut watch) = Watch::start(&baseline, pasted) else {
+        return WatchEnd::PasteNotInField;
+    };
 
     let deadline = Instant::now() + timing.watch_for;
     loop {
@@ -91,16 +169,23 @@ pub fn run_watch(
         }
         if secure_now() || reader.is_secure() {
             debug!("Watch stopped: secure input");
-            return None;
+            return WatchEnd::SecureInput;
         }
         let reading = reader.read();
         match watch.feed(reading.as_deref()) {
             WatchStep::Continue => {}
-            WatchStep::Finish(region) => return region.or_else(|| unchanged(&watch, pasted)),
+            WatchStep::Finish(region) => {
+                return region
+                    .or_else(|| unchanged(&watch, pasted))
+                    .map_or(WatchEnd::NoGoodReading, WatchEnd::Region)
+            }
         }
     }
     let kept = unchanged(&watch, pasted);
-    watch.finish().or(kept)
+    watch
+        .finish()
+        .or(kept)
+        .map_or(WatchEnd::NoGoodReading, WatchEnd::Region)
 }
 
 /// `Some(pasted)` when the watch saw the text survive as pasted.
@@ -137,7 +222,7 @@ impl WatchHandle {
 /// has to be `Send`. `done` runs once on the same thread with the result of
 /// [`run_watch`].
 pub fn spawn_watch_with(
-    prepare: impl FnOnce() -> Option<Box<dyn FieldReader>> + Send + 'static,
+    prepare: impl FnOnce() -> Result<Box<dyn FieldReader>, NoField> + Send + 'static,
     pasted: String,
     timing: WatchTiming,
     secure_now: impl Fn() -> bool + Send + 'static,
@@ -148,10 +233,14 @@ pub fn spawn_watch_with(
     let join = std::thread::Builder::new()
         .name("learning-watch".into())
         .spawn(move || {
-            let result = prepare().and_then(|reader| {
-                run_watch(&*reader, &pasted, timing, &secure_now, &stop_for_thread)
-            });
-            done(result);
+            let end = match prepare() {
+                Ok(reader) => {
+                    run_watch_end(&*reader, &pasted, timing, &secure_now, &stop_for_thread)
+                }
+                Err(why) => WatchEnd::NoField(why),
+            };
+            info!("Watch ended: {}", end.reason());
+            done(end.into_region());
         })
         .ok();
     WatchHandle { stop, join }
@@ -165,7 +254,7 @@ pub fn spawn_watch_with(
 /// before the second reads anything, and the two never mix their texts.
 pub fn spawn_watch_after(
     previous: Option<WatchHandle>,
-    capture: impl FnOnce() -> Option<Box<dyn FieldReader>> + Send + 'static,
+    capture: impl FnOnce() -> Result<Box<dyn FieldReader>, NoField> + Send + 'static,
     pasted: String,
     timing: WatchTiming,
     secure_now: impl Fn() -> bool + Send + 'static,
@@ -201,7 +290,7 @@ pub fn spawn_watch(
     done: impl FnOnce(Option<String>) + Send + 'static,
 ) -> WatchHandle {
     spawn_watch_with(
-        move || Some(reader as Box<dyn FieldReader>),
+        move || Ok(reader as Box<dyn FieldReader>),
         pasted,
         timing,
         secure_now,
@@ -404,6 +493,49 @@ mod tests {
         );
     }
 
+    fn end(script: &Script, pasted: &str, watch_for_ms: u64) -> WatchEnd {
+        run_watch_end(
+            script,
+            pasted,
+            fast(watch_for_ms),
+            &|| false,
+            &AtomicBool::new(false),
+        )
+    }
+
+    #[test]
+    fn each_way_a_watch_ends_has_its_own_reason() {
+        assert_eq!(
+            end(&Script::new(&["something else"]), "hello Calvin", 50),
+            WatchEnd::PasteNotInField
+        );
+        assert_eq!(
+            end(&Script::new(&[]), "hello", 50),
+            WatchEnd::BaselineUnreadable
+        );
+        assert_eq!(
+            end(
+                &Script::new(&["hello Calvin", "hello Kelvin"]),
+                "hello Calvin",
+                50
+            ),
+            WatchEnd::Region("hello Kelvin".to_string())
+        );
+        let mut secret = Script::new(&["hello"]);
+        secret.secure = true;
+        assert_eq!(end(&secret, "hello", 50), WatchEnd::SecureInput);
+    }
+
+    #[test]
+    fn a_reason_names_no_user_text() {
+        let region = WatchEnd::Region("send it to Kelvin".to_string());
+        assert!(!region.reason().contains("Kelvin"));
+        assert_eq!(
+            NoField::NoReadableText.reason(),
+            "the focused element has no readable text"
+        );
+    }
+
     #[test]
     fn a_paste_that_is_not_in_the_box_learns_nothing() {
         let script = Script::new(&["something else entirely"]);
@@ -480,7 +612,7 @@ mod tests {
         let first_done_log = Arc::clone(&log);
         let first = spawn_watch_with(
             move || {
-                Some(Box::new(Logging(
+                Ok(Box::new(Logging(
                     first_log,
                     "first",
                     Script::new(&[
@@ -509,7 +641,7 @@ mod tests {
         let second = spawn_watch_after(
             Some(first),
             move || {
-                Some(Box::new(Logging(
+                Ok(Box::new(Logging(
                     second_log,
                     "second",
                     Script::new(&["hello there", "hello there"]),
@@ -542,7 +674,7 @@ mod tests {
     fn finish_now_waits_for_done() {
         let (tx, rx) = mpsc::channel();
         let handle = spawn_watch_with(
-            || None,
+            || Err(NoField::NoFocusedElement),
             "x".to_string(),
             fast(5_000),
             || false,
