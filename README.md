@@ -14,17 +14,21 @@ Speech models sometimes hear a word wrong, for example "Calvin" for "Kelvin". In
 
 1. Handy pastes the text.
 2. You fix the wrong word in the text box, as usual.
-3. Handy watches that text box for a short time (default 30 s), through macOS Accessibility. It learns the fix only when the old and new words sound alike, or differ only in spelling or capitals. A change of mind is not learned.
+3. Handy watches that text box for a short time (default 30 s), through macOS Accessibility or Windows UI Automation. It learns the fix only when the old and new words sound alike, or differ only in spelling or capitals. A change of mind is not learned.
 4. A small notice says "Learned: Calvin → Kelvin", with an **Undo** button.
 5. The next time, Handy fixes the word before it pastes.
 
 When you sometimes mean the original word (for example "heiress" and the project name "Eres"), Handy pastes its best guess and shows the other option. Click **Swap**, or press the swap shortcut, to change it. That choice also teaches Handy. If you add a [Jev](https://docs.typesafe.ai) API key, Handy asks Jev to choose first. Only that one sentence is sent to Jev, as text. Audio never leaves your Mac.
 
-For apps that do not show their text to Accessibility, edit the transcription in **History**. Handy learns from that edit.
+For apps that do not show their text to the accessibility API, edit the transcription in **History**. Handy learns from that edit.
 
 The **Learned** page in settings lists every fix. You can edit, pause or delete each one. The layer works with every model. Whisper-family models also get the learned words as a prompt.
 
 Design and decisions: [docs/learning/DESIGN.md](docs/learning/DESIGN.md).
+
+### Install this fork on Windows
+
+Build with `bun run tauri build` (see [BUILD.md](BUILD.md)) and run the installer from `src-tauri/target/release/bundle/nsis/`. It replaces an installed Handy in place; settings, history and models stay. The watch needs no permission on Windows.
 
 ### Install this fork on macOS
 

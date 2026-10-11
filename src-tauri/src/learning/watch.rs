@@ -22,13 +22,18 @@ pub const POLL: Duration = Duration::from_millis(500);
 /// Why no text box can be watched. Logged; it never holds user text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoField {
+    /// Only the macOS watcher uses it: Windows asks no permission.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     NotTrusted,
     NoFocusedElement,
     SecretField,
     NoReadableText,
-    /// Only the watcher for platforms without Accessibility support uses it.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    /// Only the watcher for platforms without accessibility support uses it.
+    #[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
     Unsupported,
+    /// Only the Windows watcher uses it: UI Automation could not start.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Unavailable,
 }
 
 impl NoField {
@@ -39,6 +44,7 @@ impl NoField {
             NoField::SecretField => "the focused field is a secret field",
             NoField::NoReadableText => "the focused element has no readable text",
             NoField::Unsupported => "this platform has no text-box watch",
+            NoField::Unavailable => "UI Automation is not available",
         }
     }
 }
@@ -314,7 +320,9 @@ pub fn locate_swap(value: &str, region: &str, find: &str, nth: usize) -> Option<
 }
 
 /// A byte range of `text` as a UTF-16 `(location, length)`, which is how
-/// Accessibility counts characters.
+/// Accessibility counts characters. The Windows watcher searches by text
+/// instead, so only macOS calls it outside tests.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn utf16_range(text: &str, bytes: Range<usize>) -> (usize, usize) {
     let location = text[..bytes.start].encode_utf16().count();
     let length = text[bytes.start..bytes.end].encode_utf16().count();
@@ -325,6 +333,8 @@ pub fn utf16_range(text: &str, bytes: Range<usize>) -> (usize, usize) {
 /// `replaced` (UTF-16 `(location, length)`) became `new_len` units long. All
 /// ranges are `(location, length)` in UTF-16 units. A position after the
 /// replacement moves with it; one inside it goes to the end of the new text.
+/// Only the macOS watcher restores the caret, so only it calls this.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn adjust_caret(
     selection: (usize, usize),
     replaced: (usize, usize),

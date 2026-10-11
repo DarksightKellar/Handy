@@ -15,7 +15,7 @@ not see the fix, so the same mistake comes back every time.
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | D1  | Handy sees each fix and records it. Kelvin fills in no form.                                                                                                                                                                                |
 | D2  | This is a fork of cjpais/Handy, not a companion app, because the fix must happen before the paste.                                                                                                                                          |
-| D3  | After a paste, Handy watches the focused text box (macOS Accessibility) for a set time (default 30 s). It learns a fix only when the old and new text sound alike, or differ only in spelling or capitals. A change of mind is not learned. |
+| D3  | After a paste, Handy watches the focused text box (macOS Accessibility, Windows UI Automation) for a set time (default 30 s). It learns a fix only when the old and new text sound alike, or differ only in spelling or capitals. A change of mind is not learned. |
 | D4  | A notice says "Learned: X → Y" with an Undo button.                                                                                                                                                                                         |
 | D5  | For apps that hide their text from Accessibility, Kelvin fixes the text in Handy's history window, and Handy learns from that edit.                                                                                                         |
 | D6  | Fixed rules apply first. When a rule has evidence both ways (Kelvin sometimes means the original word), the phrase is ambiguous.                                                                                                            |
@@ -36,7 +36,7 @@ audio → model → TranscriptionManager (custom words, fillers, normalise)
             → LearningService::apply          ← NEW: learned rules, ambiguity, Jev
             → optional LLM post-processing (upstream)
       → paste
-      → LearningService::begin_watch          ← NEW: Accessibility watch of the text box
+      → LearningService::begin_watch          ← NEW: accessibility watch of the text box
             → Learner::observe → new rules / evidence → notice
 ```
 
@@ -58,6 +58,7 @@ sees and edits, so a rule learned from an edit always matches the next transcrip
 | `store.rs`         | adapter | SQLite rule store (`learning.db` in the app data dir)                            |
 | `jev.rs`           | adapter | Jev HTTP client behind the `Decider` trait                                       |
 | `watcher_macos.rs` | adapter | Accessibility: read the focused element, poll it, write a swap                   |
+| `watcher_windows.rs` | adapter | UI Automation: read the focused element, poll it, select a word and type over it |
 | `service.rs`       | glue    | Tauri state; joins the core, the store, the decider, the watcher and the notices |
 | `commands.rs`      | glue    | Tauri commands for the settings page, history edits, Undo and Swap               |
 
@@ -67,6 +68,6 @@ so each core test runs with fakes.
 ## Privacy
 
 - The watcher reads only the element that received the paste, and only during the watch.
-- It stops at once when macOS Secure Input is on or the element is a secure text field.
+- It stops at once when macOS Secure Input is on or the element is a secure text field (a password box on Windows).
 - Logs redact text through `utils::redact_text`.
 - Jev receives one sentence. No key, no call.
